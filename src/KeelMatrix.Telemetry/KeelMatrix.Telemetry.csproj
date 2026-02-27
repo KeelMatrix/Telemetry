@@ -1,0 +1,58 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFrameworks>net8.0;netstandard2.0</TargetFrameworks>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<Authors>KeelMatrix</Authors>
+		<EnablePublicApiAnalyzers>true</EnablePublicApiAnalyzers>
+		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+		<PackageId>KeelMatrix.Telemetry</PackageId>
+		<Description>Shared, privacy-first telemetry infrastructure for KeelMatrix products, providing activation and usage signals with minimal, non-intrusive data collection.</Description>	<PackageTags>telemetry;analytics;observability;dotnet;library;nuget;activation;usage-tracking;privacy;non-blocking</PackageTags>
+		<RepositoryUrl>https://github.com/KeelMatrix/Telemetry</RepositoryUrl>
+		<PackageProjectUrl>https://github.com/KeelMatrix/Telemetry#readme</PackageProjectUrl>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageIcon>icon.png</PackageIcon>
+		<RepositoryType>git</RepositoryType>
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+		<IncludeSymbols>true</IncludeSymbols>
+		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+		<GenerateDocumentationFile>true</GenerateDocumentationFile>
+	</PropertyGroup>
+
+	<!-- Release promotes warnings to errors -->
+	<PropertyGroup Condition="'$(Configuration)'=='Release'">
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+	</PropertyGroup>
+	<PropertyGroup Condition="'$(Configuration)'=='Debug'">
+		<TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)'=='Debug'">
+		<GenerateDocumentationFile>false</GenerateDocumentationFile>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- SourceLink pinned centrally in Directory.Packages.props -->
+		<PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="all" />
+
+		<!-- Public API analyzer referenced unconditionally; toggle via property above -->
+		<PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
+	</ItemGroup>
+
+  <!-- Scope System.Text.Json to netstandard2.0 only (CPM supplies the version).
+       net8.0 uses the in-box STJ; do not restore the package there. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <!-- Make sure no STJ package comes in for net8.0 even via transitive -->
+    <PackageReference Update="System.Text.Json" ExcludeAssets="all" />
+  </ItemGroup>
+  
+</Project>

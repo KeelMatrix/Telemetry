@@ -1,0 +1,5 @@
+#nullable enable
+KeelMatrix.Telemetry.Client
+KeelMatrix.Telemetry.Client.Client(string! toolName, System.Type! toolType) -> void
+KeelMatrix.Telemetry.Client.TrackActivation() -> void
+KeelMatrix.Telemetry.Client.TrackHeartbeat() -> void

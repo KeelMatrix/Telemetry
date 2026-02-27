@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj" />
+  </Folder>
+</Solution>
