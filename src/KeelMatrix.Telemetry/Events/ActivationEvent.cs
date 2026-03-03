@@ -23,15 +23,15 @@ namespace KeelMatrix.Telemetry.Events {
         }
 
         /// <summary>The runtime identifier (e.g. net8.0).</summary>
-        internal string Runtime { get; }
+        public string Runtime { get; }
 
         /// <summary>The operating system identifier.</summary>
-        internal string Os { get; }
+        public string Os { get; }
 
         /// <summary>Indicates whether the tool is running in CI.</summary>
-        internal bool Ci { get; }
+        public bool Ci { get; }
 
         /// <summary>The UTC timestamp of activation.</summary>
-        internal string Timestamp { get; }
+        public string Timestamp { get; }
     }
 }

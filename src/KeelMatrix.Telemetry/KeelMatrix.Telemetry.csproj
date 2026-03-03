@@ -54,5 +54,10 @@
     <!-- Make sure no STJ package comes in for net8.0 even via transitive -->
     <PackageReference Update="System.Text.Json" ExcludeAssets="all" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="icon.png" Pack="true" PackagePath="" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
   
 </Project>

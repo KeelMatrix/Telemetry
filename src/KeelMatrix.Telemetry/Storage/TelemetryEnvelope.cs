@@ -1,6 +1,7 @@
 // Copyright (c) KeelMatrix
 
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 #if NETSTANDARD2_0
 namespace System.Runtime.CompilerServices
@@ -19,16 +20,17 @@ namespace KeelMatrix.Telemetry.Storage {
     /// Stored on disk as JSON.
     /// </summary>
     internal sealed class TelemetryEnvelope {
-        internal string Id { get; }
-        internal string PayloadJson { get; }
-        internal DateTimeOffset EnqueuedUtc { get; }
-        internal int Attempts { get; init; }
+        public string Id { get; }
+        public string PayloadJson { get; }
+        public DateTimeOffset EnqueuedUtc { get; }
+        public int Attempts { get; init; }
 
         internal TelemetryEnvelope(string payloadJson)
             : this(Guid.NewGuid().ToString("N"), payloadJson, DateTimeOffset.UtcNow) {
         }
 
-        internal TelemetryEnvelope(string id, string payloadJson, DateTimeOffset enqueuedUtc) {
+        [JsonConstructor]
+        public TelemetryEnvelope(string id, string payloadJson, DateTimeOffset enqueuedUtc) {
             Id = id;
             PayloadJson = payloadJson;
             EnqueuedUtc = enqueuedUtc;

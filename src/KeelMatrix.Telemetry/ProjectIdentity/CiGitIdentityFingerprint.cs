@@ -36,7 +36,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (!TryGetCiIdentityString(out var identityRaw))
                 return false;
 
-            if (!RepoKeyNormalizer.TryNormalize(identityRaw, out var normalizedRepoKey))
+            if (!RepoKeyNormalizer.TryNormalize(identityRaw, out var normalizedRepoKey) || normalizedRepoKey is null)
                 return false;
 
             var prefix = Encoding.UTF8.GetBytes("ci.v1");
@@ -111,7 +111,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
                 // Remote origin identity (preferred for repos).
                 if (GitDiscovery.TryReadOriginRemoteUrl(gitDir, out var originUrlRaw) &&
-                    RepoKeyNormalizer.TryNormalize(originUrlRaw, out var normalizedOrigin)) {
+                    RepoKeyNormalizer.TryNormalize(originUrlRaw, out var normalizedOrigin) &&
+                    normalizedOrigin is not null) {
                     var prefix = Encoding.UTF8.GetBytes("git-remote.v1");
                     var key = Encoding.UTF8.GetBytes(normalizedOrigin);
                     fingerprintBytes = Sha256(Concat(prefix, key));

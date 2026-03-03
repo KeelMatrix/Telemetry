@@ -2,4 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KeelMatrix.Telemetry.CiEnvironmentTests/KeelMatrix.Telemetry.CiEnvironmentTests.csproj" Id="72eeefbf-e98d-4960-815f-6aba9f2c18f9" />
+    <Project Path="tests/KeelMatrix.Telemetry.IntegrationTests/KeelMatrix.Telemetry.IntegrationTests.csproj" Id="79fae171-83cc-474b-9a9b-a8e9c03b5ba0" />
+    <Project Path="tests/KeelMatrix.Telemetry.UnitTests/KeelMatrix.Telemetry.UnitTests.csproj" Id="3a0308b5-8a88-4776-8871-6c6bf7d444b0" />
+  </Folder>
 </Solution>

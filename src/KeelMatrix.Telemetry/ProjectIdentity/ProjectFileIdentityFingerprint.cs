@@ -15,8 +15,13 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 if (!TrySelectPrimaryIdentityFile(start, out var identityRoot, out var primaryPath, out var primaryRole))
                     continue;
 
+                // If we can select a primary identity file for this starting point, do NOT fall back to
+                // other starting points if computing fails (e.g., primary is unreadable/too large).
                 if (TryComputeFingerprintForRoot(identityRoot, primaryPath, primaryRole, out fingerprintBytes))
                     return true;
+
+                fingerprintBytes = [];
+                return false;
             }
 
             fingerprintBytes = [];
@@ -40,15 +45,11 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             var projCandidates = new List<Candidate>();
 
             string? current = SafeGetFullPath(startingPoint);
-
-            string highestVisited = string.Empty;
             string markerRoot = string.Empty;
 
             for (int step = 0;
                  step <= TelemetryConfig.ProjectIdentity.MaxUpwardSteps && !string.IsNullOrEmpty(current);
                  step++) {
-
-                highestVisited = current!;
 
                 if (string.IsNullOrEmpty(markerRoot) && LooksLikeRepoRootMarker(current!))
                     markerRoot = current!;
@@ -67,15 +68,10 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 primaryRole = "sln";
 
                 var primaryDir = SafeGetFullPath(Path.GetDirectoryName(primaryPath) ?? string.Empty);
-                if (!string.IsNullOrEmpty(markerRoot)) {
-                    identityRoot = markerRoot;
-                }
-                else if (!string.IsNullOrEmpty(highestVisited)) {
-                    identityRoot = highestVisited;
-                }
-                else {
-                    identityRoot = primaryDir;
-                }
+
+                identityRoot = !string.IsNullOrEmpty(markerRoot)
+                    ? markerRoot
+                    : primaryDir;
 
                 return !string.IsNullOrEmpty(identityRoot) && !string.IsNullOrEmpty(primaryPath);
             }
@@ -90,20 +86,41 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 primaryRole = "proj";
 
                 var primaryDir = SafeGetFullPath(Path.GetDirectoryName(primaryPath) ?? string.Empty);
-                if (!string.IsNullOrEmpty(markerRoot)) {
-                    identityRoot = markerRoot;
-                }
-                else if (!string.IsNullOrEmpty(highestVisited)) {
-                    identityRoot = highestVisited;
-                }
-                else {
-                    identityRoot = primaryDir;
-                }
+
+                identityRoot = !string.IsNullOrEmpty(markerRoot)
+                    ? markerRoot
+                    : SelectRepoRootFromProjectDir(primaryDir);
 
                 return !string.IsNullOrEmpty(identityRoot) && !string.IsNullOrEmpty(primaryPath);
             }
 
             return false;
+        }
+
+        private static string SelectRepoRootFromProjectDir(string projectDir) {
+            if (string.IsNullOrWhiteSpace(projectDir))
+                return string.Empty;
+
+            try {
+                var name = Path.GetFileName(projectDir.TrimEnd('\\', '/')) ?? string.Empty;
+
+                // Common convention: projects live under a container folder; identity root should be the parent.
+                if (name.Equals("src", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("source", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("sources", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("test", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("tests", StringComparison.OrdinalIgnoreCase)) {
+
+                    var parent = Directory.GetParent(projectDir);
+                    if (parent != null)
+                        return parent.FullName;
+                }
+
+                return projectDir;
+            }
+            catch {
+                return projectDir;
+            }
         }
 
         private static bool LooksLikeRepoRootMarker(string dir) {

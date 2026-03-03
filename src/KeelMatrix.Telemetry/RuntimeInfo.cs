@@ -6,7 +6,28 @@ namespace KeelMatrix.Telemetry {
     internal static class RuntimeInfo {
         internal static string Runtime { get; } = DetectRuntime();
         internal static string Os { get; } = DetectOs();
-        internal static bool IsCi { get; } = DetectCi();
+
+        private static readonly bool detectedCi = DetectCi();
+
+        // -1 = no override, 0 = false, 1 = true
+        private static int ciOverride = -1;
+
+        internal static bool IsCi {
+            get {
+                var o = Volatile.Read(ref ciOverride);
+                return o switch {
+                    0 => false,
+                    1 => true,
+                    _ => detectedCi
+                };
+            }
+        }
+
+        internal static void SetCiOverrideForTests(bool? isCi) {
+#pragma warning disable S3358 // Ternary operators should not be nested
+            Volatile.Write(ref ciOverride, isCi is null ? -1 : (isCi.Value ? 1 : 0));
+#pragma warning restore S3358
+        }
 
         private static string DetectRuntime() {
             try {

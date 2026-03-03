@@ -9,7 +9,11 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     /// Safe across crashes and multiple processes.
     /// </summary>
     internal sealed class DurableTelemetryQueue : ITelemetryQueue {
-        internal static ITelemetryQueue Instance { get; } = CreateSafe();
+#pragma warning disable IDE0044 // Make field readonly
+        private static ITelemetryQueue instance = CreateSafe();
+#pragma warning restore IDE0044
+        internal static ITelemetryQueue Instance => Volatile.Read(ref instance);
+
 
         private readonly string pendingDir;
         private readonly string processingDir;
@@ -88,19 +92,25 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 var finalPath = Path.Combine(pendingDir, $"{envelope.Id}.json");
                 var tmpPath = finalPath + ".tmp";
 
-                using var fs = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None);
-                using var sw = new StreamWriter(fs);
-                sw.Write(envelope.Serialize());
-                sw.Flush();
-                fs.Flush(true);
+                // Write fully and close the file BEFORE attempting the atomic move.
+                File.WriteAllText(tmpPath, envelope.Serialize(), Encoding.UTF8);
 
                 try {
-                    File.Move(tmpPath, finalPath);
+#if NET8_0_OR_GREATER
+                    File.Move(tmpPath, finalPath, overwrite: true);
+#else
+                // netstandard2.0: best-effort overwrite emulation.
+                try { File.Delete(finalPath); } catch { /* ignore */ }
+                File.Move(tmpPath, finalPath);
+#endif
                 }
                 catch {
-                    // If destination somehow exists or race occurred, just drop tmp
+                    // If move fails, do not leave tmp behind.
                     try { File.Delete(tmpPath); } catch { /* swallow */ }
                 }
+
+                try { EnforceLimitOnDirectory(pendingDir, TelemetryConfig.MaxPendingItems); }
+                catch { /* swallow */ }
             }
             catch {
                 // Must never affect caller
@@ -264,18 +274,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 var target = Path.Combine(deadLetterDir, Path.GetFileName(processingPath));
 #if NET8_0_OR_GREATER
                 File.Move(processingPath, target, overwrite: true);
+                EnforceLimitOnDirectory(deadLetterDir, TelemetryConfig.MaxDeadLetterItems);
 #else
-        // netstandard2.0: best-effort overwrite emulation
-        try {
-            if (File.Exists(target))
-                File.Delete(target);
+                // netstandard2.0: best-effort overwrite emulation
+                try {
+                    if (File.Exists(target))
+                        File.Delete(target);
 
-            File.Move(processingPath, target);
-        }
-        catch {
-            // If we can't move to dead-letter, leave the processing file in place.
-            // (CrashRecovery will return it to pending on next start.)
-        }
+                    File.Move(processingPath, target);
+                    EnforceLimitOnDirectory(deadLetterDir, TelemetryConfig.MaxDeadLetterItems);
+                }
+                catch {
+                    // If we can't move to dead-letter, leave the processing file in place.
+                    // (CrashRecovery will return it to pending on next start.)
+                }
 #endif
             }
             catch {
@@ -326,6 +338,13 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         private static string ResolveQueueRoot() {
+            try {
+                TelemetryConfig.Runtime.EnsureRootDirectoryResolvedOnWorkerThread();
+            }
+            catch {
+                // swallow
+            }
+
             return Path.Combine(TelemetryConfig.Runtime.GetRootDirectory(), "telemetry.queue");
         }
 

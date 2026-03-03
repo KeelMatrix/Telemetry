@@ -66,7 +66,7 @@ namespace KeelMatrix.Telemetry {
             try {
                 var files = Directory.EnumerateFiles(markerDir, "*.json")
                                      .Select(p => new FileInfo(p))
-                                     .OrderBy(f => f.CreationTimeUtc)
+                                     .OrderBy(f => f.LastWriteTimeUtc)
                                      .ToList();
 
                 var excess = files.Count - TelemetryConfig.MaxMarkerFiles;

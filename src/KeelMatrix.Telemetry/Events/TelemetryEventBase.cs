@@ -22,21 +22,21 @@ namespace KeelMatrix.Telemetry.Events {
         }
 
         /// <summary>The event type identifier.</summary>
-        internal string Event { get; }
+        public string Event { get; }
 
         /// <summary>The telemetry tool name.</summary>
-        internal string Tool { get; }
+        public string Tool { get; }
 
         /// <summary>The calling library's tool version.</summary>
-        internal string ToolVersion { get; }
+        public string ToolVersion { get; }
 
         /// <summary>The telemetry (this library) version.</summary>
-        internal string TelemetryVersion { get; }
+        public string TelemetryVersion { get; }
 
         /// <summary>The telemetry schema version.</summary>
-        internal int SchemaVersion { get; }
+        public int SchemaVersion { get; }
 
         /// <summary>A stable, anonymous project identifier.</summary>
-        internal string ProjectHash { get; }
+        public string ProjectHash { get; }
     }
 }

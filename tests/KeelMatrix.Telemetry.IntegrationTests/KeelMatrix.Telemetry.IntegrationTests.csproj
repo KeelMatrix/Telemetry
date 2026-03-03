@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit" Condition="'$(ManagePackageVersionsCentrally)' == 'true'" />
+    <PackageReference Include="xunit.runner.visualstudio" Condition="'$(ManagePackageVersionsCentrally)' == 'true'" />
+    <PackageReference Include="FluentAssertions" Condition="'$(ManagePackageVersionsCentrally)' == 'true'" />
+    <PackageReference Include="coverlet.collector" Condition="'$(ManagePackageVersionsCentrally)' == 'true'" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Condition="'$(ManagePackageVersionsCentrally)' == 'true'" />
+
+    <PackageReference Include="xunit" Version="2.7.1" Condition="'$(ManagePackageVersionsCentrally)' != 'true'" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.7" Condition="'$(ManagePackageVersionsCentrally)' != 'true'" />
+    <PackageReference Include="FluentAssertions" Version="6.12.2" Condition="'$(ManagePackageVersionsCentrally)' != 'true'" />
+    <PackageReference Include="coverlet.collector" Version="6.0.2" Condition="'$(ManagePackageVersionsCentrally)' != 'true'" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" Condition="'$(ManagePackageVersionsCentrally)' != 'true'" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\KeelMatrix.Telemetry\KeelMatrix.Telemetry.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

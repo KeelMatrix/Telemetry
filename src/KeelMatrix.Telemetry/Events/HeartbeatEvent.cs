@@ -17,6 +17,6 @@ namespace KeelMatrix.Telemetry.Events {
         }
 
         /// <summary>The ISO week string (YYYY-Www).</summary>
-        internal string Week { get; }
+        public string Week { get; }
     }
 }

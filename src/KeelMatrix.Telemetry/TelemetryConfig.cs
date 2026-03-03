@@ -6,8 +6,28 @@ namespace KeelMatrix.Telemetry {
     /// </summary>
     internal static class TelemetryConfig {
         private const string KeelMatrixTelemetryUrl = "https://keelmatrix-nuget-telemetry.dz-bb6.workers.dev";
-        internal static readonly Uri Url =
+
+        private static readonly Uri ProductionUrl =
             new(KeelMatrixTelemetryUrl, UriKind.Absolute);
+
+        private static Uri? urlOverrideForTests;
+
+        internal static Uri Url =>
+            Volatile.Read(ref urlOverrideForTests) ?? ProductionUrl;
+
+        // For IntegrationTests: set to http://127.0.0.1:<port>/ (or similar); set to null to restore production.
+        internal static void SetUrlOverrideForTests(Uri? uri) {
+            if (uri is not null) {
+                if (!uri.IsAbsoluteUri)
+                    throw new ArgumentException("Override URL must be absolute.", nameof(uri));
+
+                // Allow http for localhost test servers.
+                if (uri.Scheme is not ("http" or "https"))
+                    throw new ArgumentException("Override URL must use http or https.", nameof(uri));
+            }
+
+            Volatile.Write(ref urlOverrideForTests, uri);
+        }
 
         internal static class Runtime {
             private static string ToolNameUpper = UnknownSymbol;
