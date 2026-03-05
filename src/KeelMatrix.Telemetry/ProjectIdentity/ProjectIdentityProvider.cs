@@ -30,38 +30,30 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         /// </summary>
         internal string EnsureComputedOnWorkerThread() {
             if (Volatile.Read(ref isComputed) == 1)
-                return cachedProjectHash ?? ComputeUninitializedPlaceholderHash();
+                return cachedProjectHash ?? throw new InvalidOperationException("Project hash was marked computed but cache is empty.");
 
+            var machineSaltBytes = machineSaltProvider.GetOrCreateMachineSaltBytes();
+
+            bool identityFromSources;
+            byte[] identityFingerprintBytes;
             try {
-                var machineSaltBytes = machineSaltProvider.GetOrCreateMachineSaltBytes();
-
-                bool identityFromSources;
-                byte[] identityFingerprintBytes;
-                try {
-                    identityFromSources = identityFingerprintPipeline.TryComputeIdentityFingerprintBytes(out identityFingerprintBytes);
-                }
-                catch {
-                    identityFromSources = false;
-                    identityFingerprintBytes = [];
-                }
-
-                if (!identityFromSources) {
-                    identityFingerprintBytes = ComputeFallbackFingerprintBytes();
-                }
-
-                // ProjectHash = SHA256( MachineSaltBytes || IdentityFingerprintBytes ) => lowercase hex, 64 chars
-                var final = Sha256(Concat(machineSaltBytes, identityFingerprintBytes));
-                cachedProjectHash = ToLowerHex(final);
+                identityFromSources = identityFingerprintPipeline.TryComputeIdentityFingerprintBytes(out identityFingerprintBytes);
             }
             catch {
-                // Absolute last resort: deterministic, non-I/O placeholder (should never be used for emission)
-                cachedProjectHash = ComputeUninitializedPlaceholderHash();
-            }
-            finally {
-                Volatile.Write(ref isComputed, 1);
+                identityFromSources = false;
+                identityFingerprintBytes = [];
             }
 
-            return cachedProjectHash ?? ComputeUninitializedPlaceholderHash();
+            if (!identityFromSources) {
+                identityFingerprintBytes = ComputeFallbackFingerprintBytes();
+            }
+
+            // ProjectHash = SHA256( MachineSaltBytes || IdentityFingerprintBytes ) => lowercase hex, 64 chars
+            var final = Sha256(Concat(machineSaltBytes, identityFingerprintBytes));
+            var computedProjectHash = ToLowerHex(final);
+            cachedProjectHash = computedProjectHash;
+            Volatile.Write(ref isComputed, 1);
+            return computedProjectHash;
         }
 
         /// <summary>

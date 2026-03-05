@@ -113,12 +113,11 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 if (!projectHashComputed && !TelemetryConfig.IsTelemetryDisabled()) {
                     try {
                         _ = projectIdentityProvider.EnsureComputedOnWorkerThread();
+                        projectHashComputed = true;
                     }
                     catch {
-                        // swallow
+                        // swallow; retry on a future worker cycle
                     }
-
-                    projectHashComputed = true;
                 }
 
                 // Plan & enqueue new telemetry based on requests (marker I/O happens here, not on caller)
@@ -201,7 +200,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 projectHash = projectIdentityProvider.EnsureComputedOnWorkerThread();
             }
             catch {
-                projectHash = projectIdentityProvider.ComputeUninitializedPlaceholderHash();
+                // Skip the cycle if identity is unavailable and retry on a future cycle.
+                if (doActivation) {
+                    Interlocked.Exchange(ref activationRequested, 1);
+                }
+
+                if (doHeartbeat) {
+                    Interlocked.Exchange(ref heartbeatRequested, 1);
+                }
+
+                return;
             }
 
             // Create dispatcher/state on worker thread (marker I/O happens inside TelemetryState).
