@@ -1,5 +1,6 @@
 // Copyright (c) KeelMatrix
 
+using System.Globalization;
 using System.Text;
 using KeelMatrix.Telemetry.Storage;
 
@@ -9,6 +10,9 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     /// Safe across crashes and multiple processes.
     /// </summary>
     internal sealed class DurableTelemetryQueue : ITelemetryQueue {
+        private const string QueueFileTimestampFormat = "yyyyMMddHHmmssfffffff";
+        private const int QueueFileTimestampLength = 21;
+
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly string pendingDir;
         private readonly string processingDir;
@@ -86,7 +90,9 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 EnforceLimit();
 
                 var envelope = new TelemetryEnvelope(payloadJson);
-                var finalPath = Path.Combine(pendingDir, $"{envelope.Id}.json");
+                var finalPath = Path.Combine(
+                    pendingDir,
+                    $"{envelope.EnqueuedUtc.UtcDateTime.ToString(QueueFileTimestampFormat, CultureInfo.InvariantCulture)}_{envelope.Id}.json");
                 var tmpPath = finalPath + ".tmp";
 
                 // Write fully and close the file BEFORE attempting the atomic move.
@@ -122,9 +128,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             var results = new List<ClaimedItem>();
 
             try {
-                foreach (var file in Directory.EnumerateFiles(pendingDir, "*.json")
-                                              .OrderBy(File.GetCreationTimeUtc)
-                                              .Take(maxItems)) {
+                foreach (var file in EnumerateFilesOrderedByFilenameTimestamp(pendingDir).Take(maxItems)) {
                     var name = Path.GetFileName(file);
                     var claimedPath = Path.Combine(processingDir, name);
 
@@ -307,9 +311,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
         private static void EnforceLimitOnDirectory(string dir, int maxQueueItems) {
             try {
-                var files = Directory.EnumerateFiles(dir, "*.json")
-                                     .OrderBy(File.GetCreationTimeUtc)
-                                     .ToList();
+                var files = EnumerateFilesOrderedByFilenameTimestamp(dir).ToList();
 
                 var excess = files.Count - maxQueueItems;
                 if (excess <= 0)
@@ -321,6 +323,68 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             }
             catch {
                 // swallow
+            }
+        }
+
+        private static IEnumerable<string> EnumerateFilesOrderedByFilenameTimestamp(string dir) {
+            var files = new List<FileTimestampSortEntry>();
+
+            try {
+                foreach (var file in Directory.EnumerateFiles(dir, "*.json")) {
+                    if (!TryParseTimestampFromFilename(file, out var timestampTicks, out var fileName))
+                        continue;
+
+                    files.Add(new FileTimestampSortEntry(file, fileName, timestampTicks));
+                }
+            }
+            catch {
+                return Array.Empty<string>();
+            }
+
+            files.Sort(static (a, b) => {
+                var timestampComparison = a.TimestampTicks.CompareTo(b.TimestampTicks);
+                if (timestampComparison != 0)
+                    return timestampComparison;
+
+                return StringComparer.Ordinal.Compare(a.FileName, b.FileName);
+            });
+
+            return files.Select(static x => x.Path);
+        }
+
+        private static bool TryParseTimestampFromFilename(string path, out long timestampTicks, out string fileName) {
+            timestampTicks = default;
+            fileName = Path.GetFileName(path);
+
+            if (string.IsNullOrEmpty(fileName))
+                return false;
+
+            if (fileName.Length <= QueueFileTimestampLength || fileName[QueueFileTimestampLength] != '_')
+                return false;
+
+            var timestampPrefix = fileName.Substring(0, QueueFileTimestampLength);
+            if (!DateTime.TryParseExact(
+                timestampPrefix,
+                QueueFileTimestampFormat,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var parsedUtc)) {
+                return false;
+            }
+
+            timestampTicks = parsedUtc.Ticks;
+            return true;
+        }
+
+        private readonly struct FileTimestampSortEntry {
+            internal string Path { get; }
+            internal string FileName { get; }
+            internal long TimestampTicks { get; }
+
+            internal FileTimestampSortEntry(string path, string fileName, long timestampTicks) {
+                Path = path;
+                FileName = fileName;
+                TimestampTicks = timestampTicks;
             }
         }
 
