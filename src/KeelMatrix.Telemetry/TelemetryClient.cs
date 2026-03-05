@@ -6,9 +6,15 @@ namespace KeelMatrix.Telemetry {
     /// Must never perform I/O or block the calling thread.
     /// </summary>
     internal sealed class TelemetryClient : ITelemetryClient {
+        private readonly Infrastructure.TelemetryDeliveryWorker worker;
+
+        internal TelemetryClient(Infrastructure.TelemetryDeliveryWorker worker) {
+            this.worker = worker;
+        }
+
         public void TrackActivation() {
             try {
-                Infrastructure.TelemetryDeliveryWorker.RequestActivation();
+                worker.RequestActivation();
             }
             catch {
                 // must never throw
@@ -17,7 +23,7 @@ namespace KeelMatrix.Telemetry {
 
         public void TrackHeartbeat() {
             try {
-                Infrastructure.TelemetryDeliveryWorker.RequestHeartbeat();
+                worker.RequestHeartbeat();
             }
             catch {
                 // must never throw

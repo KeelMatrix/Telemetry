@@ -9,21 +9,18 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     /// Safe across crashes and multiple processes.
     /// </summary>
     internal sealed class DurableTelemetryQueue : ITelemetryQueue {
-#pragma warning disable IDE0044 // Make field readonly
-        private static ITelemetryQueue instance = CreateSafe();
-#pragma warning restore IDE0044
-        internal static ITelemetryQueue Instance => Volatile.Read(ref instance);
-
-
+        private readonly TelemetryRuntimeContext runtimeContext;
         private readonly string pendingDir;
         private readonly string processingDir;
         private readonly string deadLetterDir;
-        private static ITelemetryQueue CreateSafe() {
-            try { return new DurableTelemetryQueue(); }
+
+        internal static ITelemetryQueue CreateSafe(TelemetryRuntimeContext runtimeContext) {
+            try { return new DurableTelemetryQueue(runtimeContext); }
             catch { return new NullTelemetryQueue(); }
         }
 
-        private DurableTelemetryQueue() {
+        private DurableTelemetryQueue(TelemetryRuntimeContext runtimeContext) {
+            this.runtimeContext = runtimeContext;
             string root = ResolveQueueRoot();
             pendingDir = Path.Combine(root, "pending");
             processingDir = Path.Combine(root, "processing");
@@ -337,15 +334,15 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             }
         }
 
-        private static string ResolveQueueRoot() {
+        private string ResolveQueueRoot() {
             try {
-                TelemetryConfig.Runtime.EnsureRootDirectoryResolvedOnWorkerThread();
+                runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
             }
             catch {
                 // swallow
             }
 
-            return Path.Combine(TelemetryConfig.Runtime.GetRootDirectory(), "telemetry.queue");
+            return Path.Combine(runtimeContext.GetRootDirectory(), "telemetry.queue");
         }
 
         internal readonly struct ClaimedItem {

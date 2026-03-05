@@ -15,10 +15,10 @@ namespace KeelMatrix.Telemetry {
                 if (TelemetryConfig.IsTelemetryDisabled())
                     return new NullTelemetryClient();
 
-                TelemetryConfig.Runtime.Set(toolName, toolType);
-                // Starts the worker (no I/O). All I/O happens inside worker thread.
-                TelemetryDeliveryWorker.EnsureStarted();
-                return new TelemetryClient();
+                var runtimeContext = new TelemetryRuntimeContext(toolName, toolType);
+                var runtimeInfo = new RuntimeInfo();
+                var worker = new TelemetryDeliveryWorker(runtimeContext, runtimeInfo);
+                return new TelemetryClient(worker);
             }
             catch {
                 // Absolute last line of defense

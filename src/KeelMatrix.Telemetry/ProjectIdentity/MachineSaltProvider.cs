@@ -4,13 +4,19 @@ using System.Security.Cryptography;
 using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
-    internal static class MachineSaltProvider {
+    internal sealed class MachineSaltProvider {
+        private readonly TelemetryRuntimeContext runtimeContext;
+
+        internal MachineSaltProvider(TelemetryRuntimeContext runtimeContext) {
+            this.runtimeContext = runtimeContext;
+        }
+
         /// <summary>
         /// Best-effort read-or-create. Stored at:
-        /// Path.Combine(TelemetryConfig.GetRootDirectory(), "telemetry.salt")
+        /// Path.Combine(TelemetryRuntimeContext.GetRootDirectory(), "telemetry.salt")
         /// The persisted format remains a hex string of 32 random bytes.
         /// </summary>
-        internal static byte[] GetOrCreateMachineSaltBytes() {
+        internal byte[] GetOrCreateMachineSaltBytes() {
             var path = ResolveSaltPath();
 
             // If telemetry is already disabled for this process, don't do I/O; return a valid value.
@@ -152,8 +158,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             return -1;
         }
 
-        private static string ResolveSaltPath() {
-            return Path.Combine(TelemetryConfig.Runtime.GetRootDirectory(), "telemetry.salt");
+        private string ResolveSaltPath() {
+            return Path.Combine(runtimeContext.GetRootDirectory(), "telemetry.salt");
         }
 
         private static void TryEnsureDirectory(string path) {

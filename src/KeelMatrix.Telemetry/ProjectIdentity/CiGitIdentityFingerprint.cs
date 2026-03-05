@@ -5,11 +5,17 @@ using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     /// <summary>
-    /// Identity sources: CI-provided repo identity → local Git origin remote → Git root commit (best-effort).
+    /// Identity sources: CI-provided repo identity -> local Git origin remote -> Git root commit (best-effort).
     /// No external processes; best-effort only.
     /// </summary>
-    internal static class CiGitIdentityFingerprint {
-        internal static bool TryCompute(out byte[] fingerprintBytes) {
+    internal sealed class CiGitIdentityFingerprint {
+        private readonly RuntimeInfo runtimeInfo;
+
+        internal CiGitIdentityFingerprint(RuntimeInfo runtimeInfo) {
+            this.runtimeInfo = runtimeInfo;
+        }
+
+        internal bool TryCompute(out byte[] fingerprintBytes) {
             try {
                 if (TryComputeFromCi(out fingerprintBytes))
                     return true;
@@ -26,11 +32,11 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             return false;
         }
 
-        private static bool TryComputeFromCi(out byte[] fingerprintBytes) {
+        private bool TryComputeFromCi(out byte[] fingerprintBytes) {
             fingerprintBytes = [];
 
             // CI identity is attempted only if CI is detected (fast path; no disk I/O).
-            if (!RuntimeInfo.IsCi)
+            if (!runtimeInfo.IsCi)
                 return false;
 
             if (!TryGetCiIdentityString(out var identityRaw))

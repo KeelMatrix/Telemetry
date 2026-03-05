@@ -5,11 +5,15 @@ using KeelMatrix.Telemetry.Serialization;
 
 namespace KeelMatrix.Telemetry.Infrastructure {
     /// <summary>
-    /// Single background worker responsible for telemetry planning (markers/events)
+    /// Background worker responsible for telemetry planning (markers/events)
     /// and durable delivery (queue + HTTP).
     /// </summary>
     internal sealed class TelemetryDeliveryWorker : IDisposable {
-        private static readonly TelemetryDeliveryWorker Instance = new();
+        private readonly TelemetryRuntimeContext runtimeContext;
+        private readonly RuntimeInfo runtimeInfo;
+        private readonly ProjectIdentityProvider projectIdentityProvider;
+        private readonly ITelemetryQueue queue;
+        private readonly TelemetryHttpSender httpSender;
 
         private readonly SemaphoreSlim signal = new(0, int.MaxValue);
         private readonly CancellationTokenSource cts = new();
@@ -36,7 +40,13 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private readonly Task _workerTask; // left for observing a potential exception during debug
 #pragma warning restore S4487
 
-        private TelemetryDeliveryWorker() {
+        internal TelemetryDeliveryWorker(TelemetryRuntimeContext runtimeContext, RuntimeInfo runtimeInfo) {
+            this.runtimeContext = runtimeContext;
+            this.runtimeInfo = runtimeInfo;
+            projectIdentityProvider = new ProjectIdentityProvider(runtimeContext, runtimeInfo);
+            queue = DurableTelemetryQueue.CreateSafe(runtimeContext);
+            httpSender = new TelemetryHttpSender(runtimeContext.Url);
+
             _workerTask = Task.Run(RunAsync);
 
             AppDomain.CurrentDomain.ProcessExit += (_, _) => Dispose();
@@ -49,28 +59,21 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         /// <summary>
-        /// Ensures the singleton worker exists. Must not block.
-        /// </summary>
-        internal static void EnsureStarted() {
-            _ = Instance;
-        }
-
-        /// <summary>
         /// Requests activation emission. Must not block.
         /// </summary>
-        internal static void RequestActivation() {
+        internal void RequestActivation() {
             // Set flag; no I/O.
-            Interlocked.Exchange(ref Instance.activationRequested, 1);
-            Instance.Signal();
+            Interlocked.Exchange(ref activationRequested, 1);
+            Signal();
         }
 
         /// <summary>
         /// Requests heartbeat emission. Must not block.
         /// </summary>
-        internal static void RequestHeartbeat() {
+        internal void RequestHeartbeat() {
             // Set flag; no I/O.
-            Interlocked.Exchange(ref Instance.heartbeatRequested, 1);
-            Instance.Signal();
+            Interlocked.Exchange(ref heartbeatRequested, 1);
+            Signal();
         }
 
         /// <summary>
@@ -99,7 +102,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
                 if (!TelemetryConfig.IsTelemetryDisabled()) {
                     try {
-                        TelemetryConfig.Runtime.EnsureRootDirectoryResolvedOnWorkerThread();
+                        runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
                     }
                     catch {
                         // swallow
@@ -109,7 +112,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 // Compute project identity/hash once on the worker thread (best-effort).
                 if (!projectHashComputed && !TelemetryConfig.IsTelemetryDisabled()) {
                     try {
-                        _ = ProjectIdentityProvider.Shared.EnsureComputedOnWorkerThread();
+                        _ = projectIdentityProvider.EnsureComputedOnWorkerThread();
                     }
                     catch {
                         // swallow
@@ -140,20 +143,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     bool anyFailed = false;
 
                     try {
-                        foreach (var item in DurableTelemetryQueue.Instance.TryClaim(4)) {
+                        foreach (var item in queue.TryClaim(4)) {
                             anyAttempted = true;
 
                             try {
-                                if (await TelemetryHttpSender.TrySendAsync(item.Envelope.PayloadJson, token).ConfigureAwait(false)) {
-                                    DurableTelemetryQueue.Instance.Complete(item);
+                                if (await httpSender.TrySendAsync(item.Envelope.PayloadJson, token).ConfigureAwait(false)) {
+                                    queue.Complete(item);
                                 }
                                 else {
-                                    DurableTelemetryQueue.Instance.Abandon(item);
+                                    queue.Abandon(item);
                                     anyFailed = true;
                                 }
                             }
                             catch {
-                                DurableTelemetryQueue.Instance.Abandon(item);
+                                queue.Abandon(item);
                                 anyFailed = true;
                             }
                         }
@@ -195,14 +198,14 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             // Compute/lock project hash on the worker thread (cached for process lifetime).
             string projectHash;
             try {
-                projectHash = ProjectIdentityProvider.Shared.EnsureComputedOnWorkerThread();
+                projectHash = projectIdentityProvider.EnsureComputedOnWorkerThread();
             }
             catch {
-                projectHash = ProjectIdentityProvider.ComputeUninitializedPlaceholderHash();
+                projectHash = projectIdentityProvider.ComputeUninitializedPlaceholderHash();
             }
 
             // Create dispatcher/state on worker thread (marker I/O happens inside TelemetryState).
-            dispatcher ??= new TelemetryDispatcher(projectHash);
+            dispatcher ??= new TelemetryDispatcher(runtimeContext, runtimeInfo, projectHash);
 
             // Needed for "activation suppresses heartbeat until next week".
             var currentWeek = TelemetryClock.GetCurrentIsoWeek();
@@ -212,10 +215,10 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 try {
                     var evt = dispatcher.TryCreateActivationEvent();
                     if (evt != null) {
-                        var json = TelemetrySerializer.Serialize(evt);
+                        var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
                         if (json != null) {
                             // Durable queue write + marker commit are I/O; safe here.
-                            DurableTelemetryQueue.Instance.Enqueue(json);
+                            queue.Enqueue(json);
                             dispatcher.CommitActivation();
                             activationSentThisRun = true;
 
@@ -237,9 +240,9 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 try {
                     var evt = dispatcher.TryCreateHeartbeatEvent();
                     if (evt != null) {
-                        var json = TelemetrySerializer.Serialize(evt);
+                        var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
                         if (json != null) {
-                            DurableTelemetryQueue.Instance.Enqueue(json);
+                            queue.Enqueue(json);
                             dispatcher.CommitHeartbeat(evt.Week);
                             Interlocked.Exchange(ref hasPendingWork, 1);
                         }
@@ -295,6 +298,13 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             }
             catch (SemaphoreFullException) { /* swallow */ }
             catch { /* swallow */ }
+
+            try {
+                httpSender.Dispose();
+            }
+            catch {
+                // swallow
+            }
         }
     }
 }

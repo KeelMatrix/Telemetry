@@ -14,7 +14,7 @@ namespace KeelMatrix.Telemetry.Serialization {
 #if NET8_0_OR_GREATER
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
 #else
-            PropertyNamingPolicy = SnakeCaseLowerNamingPolicy.Instance,
+            PropertyNamingPolicy = new SnakeCaseLowerNamingPolicy(),
 #endif
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             WriteIndented = false
@@ -23,8 +23,8 @@ namespace KeelMatrix.Telemetry.Serialization {
         /// <summary>
         /// Serializes the given telemetry event to a JSON string.
         /// </summary>
-        internal static string? Serialize(TelemetryEventBase telemetryEvent) {
-            if (!TelemetrySchemaValidator.IsValid(telemetryEvent))
+        internal static string? Serialize(TelemetryEventBase telemetryEvent, string expectedToolName) {
+            if (!TelemetrySchemaValidator.IsValid(telemetryEvent, expectedToolName))
                 return null;
 
             var json = JsonSerializer.Serialize(telemetryEvent, telemetryEvent.GetType(), Options);
@@ -37,8 +37,6 @@ namespace KeelMatrix.Telemetry.Serialization {
 #if !NET8_0_OR_GREATER
         private sealed class SnakeCaseLowerNamingPolicy : JsonNamingPolicy
         {
-            internal static readonly SnakeCaseLowerNamingPolicy Instance = new();
-
             public override string ConvertName(string name)
             {
                 if (string.IsNullOrEmpty(name))

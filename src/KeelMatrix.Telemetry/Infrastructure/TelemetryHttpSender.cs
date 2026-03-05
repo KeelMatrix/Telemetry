@@ -6,24 +6,29 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     /// <summary>
     /// Handles low-level transmission of telemetry payloads.
     /// </summary>
-    internal static class TelemetryHttpSender {
+    internal sealed class TelemetryHttpSender : IDisposable {
 #if NET8_0_OR_GREATER
-        private readonly static HttpClient httpClient = CreateHttpClient();
+        private readonly HttpClient httpClient = CreateHttpClient();
 #else
-        private static HttpClient httpClient = CreateHttpClient();
-        private static long createdAtTicks = DateTime.UtcNow.Ticks;
+        private HttpClient httpClient = CreateHttpClient();
+        private long createdAtTicks = DateTime.UtcNow.Ticks;
         // Rotate client periodically on netstandard2.0 to avoid stale DNS
         private static readonly TimeSpan ClientLifetime = TimeSpan.FromMinutes(5);
 
 #endif
+        private readonly Uri url;
 
-        internal static async Task<bool> TrySendAsync(string json, CancellationToken token) {
+        internal TelemetryHttpSender(Uri url) {
+            this.url = url;
+        }
+
+        internal async Task<bool> TrySendAsync(string json, CancellationToken token) {
             try {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 var client = GetClient();
                 using var response = await client
-                    .PostAsync(TelemetryConfig.Url, content, token)
+                    .PostAsync(url, content, token)
                     .ConfigureAwait(false);
 
                 return response.IsSuccessStatusCode;
@@ -33,7 +38,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             }
         }
 
-        private static HttpClient GetClient() {
+        private HttpClient GetClient() {
 #if NET8_0_OR_GREATER
             return httpClient;
 #else
@@ -56,7 +61,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private static HttpClient CreateHttpClient() {
 #if NET8_0_OR_GREATER
             var handler = new SocketsHttpHandler {
-                // Forces periodic reconnect → DNS refresh
+                // Forces periodic reconnect -> DNS refresh
                 PooledConnectionLifetime = TimeSpan.FromMinutes(5),
                 PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
 
@@ -72,6 +77,15 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 Timeout = TimeSpan.FromSeconds(3)
             };
 #endif
+        }
+
+        public void Dispose() {
+            try {
+                httpClient.Dispose();
+            }
+            catch {
+                // swallow
+            }
         }
     }
 }

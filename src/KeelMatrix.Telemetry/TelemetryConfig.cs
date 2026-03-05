@@ -29,99 +29,6 @@ namespace KeelMatrix.Telemetry {
             Volatile.Write(ref urlOverrideForTests, uri);
         }
 
-        internal static class Runtime {
-            private static string ToolNameUpper = UnknownSymbol;
-            private static string? RootDirectory;
-            internal static string ToolVersion { get; private set; } = UnknownSymbol;
-            internal static string ToolName { get; private set; } = UnknownSymbol;
-
-            internal static string GetRootDirectory() {
-                return Volatile.Read(ref RootDirectory)
-                    ?? throw new InvalidOperationException("Telemetry root directory has not been resolved yet.");
-            }
-
-            internal static void Set(string toolName, Type toolType) {
-                ToolNameUpper = toolName;
-                ToolVersion = toolType.Assembly.GetName().Version?.ToString() ?? UnknownSymbol;
-                ToolName = ToolNameUpper.ToLowerInvariant();
-
-                // Root is resolved on the worker thread to avoid any I/O on caller thread.
-                Volatile.Write(ref RootDirectory, null);
-            }
-
-            internal static void EnsureRootDirectoryResolvedOnWorkerThread() {
-                if (Volatile.Read(ref RootDirectory) is not null)
-                    return;
-
-                var computed = ResolveRootDirectory();
-
-                // If multiple worker wakes race (or multiple workers exist unexpectedly), keep the first resolved value.
-                _ = Interlocked.CompareExchange(ref RootDirectory, computed, null);
-            }
-
-            private static string ResolveRootDirectory() {
-                try {
-                    // 1) Preferred: LocalApplicationData (per-user, non-roaming).
-                    var local = SafeGetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-                    if (IsUsableAbsolutePath(local))
-                        return Path.Combine(local, "KeelMatrix", ToolNameUpper);
-
-                    // 2) Fallback: ApplicationData (roaming). Still per-user and usually writable.
-                    var roaming = SafeGetFolderPath(Environment.SpecialFolder.ApplicationData);
-                    if (IsUsableAbsolutePath(roaming))
-                        return Path.Combine(roaming, "KeelMatrix", ToolNameUpper);
-
-                    // 3) Fallback: UserProfile (cross-platform). Use ".local/share" on Unix-like.
-                    var userProfile = SafeGetFolderPath(Environment.SpecialFolder.UserProfile);
-                    if (IsUsableAbsolutePath(userProfile)) {
-                        if (Path.DirectorySeparatorChar != '\\') {
-                            // ~/.local/share/KeelMatrix/{ToolNameUpper}
-                            return Path.Combine(userProfile, ".local", "share", "KeelMatrix", ToolNameUpper);
-                        }
-
-                        // Windows: keep it simple under user profile if nothing else is available.
-                        return Path.Combine(userProfile, "AppData", "Local", "KeelMatrix", ToolNameUpper);
-                    }
-
-                    // 4) Last resort: temp (always absolute).
-                    var temp = Path.GetTempPath();
-                    if (IsUsableAbsolutePath(temp))
-                        return Path.Combine(temp, "KeelMatrix", ToolNameUpper);
-                }
-                catch {
-                    // swallow and fall through to absolute temp fallback
-                }
-
-                // Absolute last line of defense: hard fallback to temp.
-                return Path.Combine(Path.GetTempPath(), "KeelMatrix", ToolNameUpper);
-
-                static string SafeGetFolderPath(Environment.SpecialFolder folder) {
-                    try { return Environment.GetFolderPath(folder) ?? string.Empty; }
-                    catch { return string.Empty; }
-                }
-
-                static bool IsUsableAbsolutePath(string path) {
-                    try {
-                        if (string.IsNullOrWhiteSpace(path))
-                            return false;
-
-                        path = path.Trim();
-
-                        // Must be rooted to avoid writing under CWD.
-                        if (!Path.IsPathRooted(path))
-                            return false;
-
-                        // Normalize; will throw on malformed paths.
-                        _ = Path.GetFullPath(path);
-                        return true;
-                    }
-                    catch {
-                        return false;
-                    }
-                }
-            }
-        }
-
         internal static class ProjectIdentity {
             internal const int MaxUpwardSteps = 32;
             internal const int MaxConfigBytes = 512 * 1024;
@@ -155,6 +62,68 @@ namespace KeelMatrix.Telemetry {
         internal static readonly TimeSpan ProcessingStaleThreshold = TimeSpan.FromMinutes(5);
         internal const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
         private static int processDisabled; // 0/1
+
+        internal static string ResolveRootDirectory(string toolNameUpper) {
+            try {
+                // 1) Preferred: LocalApplicationData (per-user, non-roaming).
+                var local = SafeGetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                if (IsUsableAbsolutePath(local))
+                    return Path.Combine(local, "KeelMatrix", toolNameUpper);
+
+                // 2) Fallback: ApplicationData (roaming). Still per-user and usually writable.
+                var roaming = SafeGetFolderPath(Environment.SpecialFolder.ApplicationData);
+                if (IsUsableAbsolutePath(roaming))
+                    return Path.Combine(roaming, "KeelMatrix", toolNameUpper);
+
+                // 3) Fallback: UserProfile (cross-platform). Use ".local/share" on Unix-like.
+                var userProfile = SafeGetFolderPath(Environment.SpecialFolder.UserProfile);
+                if (IsUsableAbsolutePath(userProfile)) {
+                    if (Path.DirectorySeparatorChar != '\\') {
+                        // ~/.local/share/KeelMatrix/{ToolNameUpper}
+                        return Path.Combine(userProfile, ".local", "share", "KeelMatrix", toolNameUpper);
+                    }
+
+                    // Windows: keep it simple under user profile if nothing else is available.
+                    return Path.Combine(userProfile, "AppData", "Local", "KeelMatrix", toolNameUpper);
+                }
+
+                // 4) Last resort: temp (always absolute).
+                var temp = Path.GetTempPath();
+                if (IsUsableAbsolutePath(temp))
+                    return Path.Combine(temp, "KeelMatrix", toolNameUpper);
+            }
+            catch {
+                // swallow and fall through to absolute temp fallback
+            }
+
+            // Absolute last line of defense: hard fallback to temp.
+            return Path.Combine(Path.GetTempPath(), "KeelMatrix", toolNameUpper);
+
+            static string SafeGetFolderPath(Environment.SpecialFolder folder) {
+                try { return Environment.GetFolderPath(folder) ?? string.Empty; }
+                catch { return string.Empty; }
+            }
+
+            static bool IsUsableAbsolutePath(string path) {
+                try {
+                    if (string.IsNullOrWhiteSpace(path))
+                        return false;
+
+                    path = path.Trim();
+
+                    // Must be rooted to avoid writing under CWD.
+                    if (!Path.IsPathRooted(path))
+                        return false;
+
+                    // Normalize; will throw on malformed paths.
+                    _ = Path.GetFullPath(path);
+                    return true;
+                }
+                catch {
+                    return false;
+                }
+            }
+        }
 
         internal static void DisableTelemetryForCurrentProcess() {
             Interlocked.Exchange(ref processDisabled, 1);

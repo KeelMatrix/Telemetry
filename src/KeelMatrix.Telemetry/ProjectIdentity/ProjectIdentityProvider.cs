@@ -7,14 +7,22 @@ using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     /// <summary>
-    /// Computes and caches a stable, anonymous per-project hash for the current process.
+    /// Computes and caches a stable, anonymous per-project hash for a telemetry client instance.
     /// All I/O and identity detection MUST run on the telemetry worker thread.
     /// </summary>
     internal sealed class ProjectIdentityProvider {
+        private readonly MachineSaltProvider machineSaltProvider;
+        private readonly IdentityFingerprintPipeline identityFingerprintPipeline;
+        private readonly string uninitializedPlaceholderHash;
+
         private int isComputed; // 0 = not computed, 1 = computed
         private string? cachedProjectHash;
 
-        internal static ProjectIdentityProvider Shared { get; } = new();
+        internal ProjectIdentityProvider(TelemetryRuntimeContext runtimeContext, RuntimeInfo runtimeInfo) {
+            machineSaltProvider = new MachineSaltProvider(runtimeContext);
+            identityFingerprintPipeline = new IdentityFingerprintPipeline(runtimeInfo);
+            uninitializedPlaceholderHash = ComputeUninitializedPlaceholderHashCore();
+        }
 
         /// <summary>
         /// Ensures the project hash is computed and cached.
@@ -25,12 +33,12 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 return cachedProjectHash ?? ComputeUninitializedPlaceholderHash();
 
             try {
-                var machineSaltBytes = MachineSaltProvider.GetOrCreateMachineSaltBytes();
+                var machineSaltBytes = machineSaltProvider.GetOrCreateMachineSaltBytes();
 
                 bool identityFromSources;
                 byte[] identityFingerprintBytes;
                 try {
-                    identityFromSources = IdentityFingerprintPipeline.TryComputeIdentityFingerprintBytes(out identityFingerprintBytes);
+                    identityFromSources = identityFingerprintPipeline.TryComputeIdentityFingerprintBytes(out identityFingerprintBytes);
                 }
                 catch {
                     identityFromSources = false;
@@ -60,7 +68,11 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         /// Deterministic, non-I/O placeholder hash for cases where callers attempt to access a project hash
         /// before the worker computed it. This is NOT the final ProjectHash formula and should not be emitted.
         /// </summary>
-        internal static string ComputeUninitializedPlaceholderHash() {
+        internal string ComputeUninitializedPlaceholderHash() {
+            return uninitializedPlaceholderHash;
+        }
+
+        private static string ComputeUninitializedPlaceholderHashCore() {
             try {
                 var fallbackFingerprint = ComputeFallbackFingerprintBytes();
                 var bytes = Concat(Encoding.UTF8.GetBytes("uninitialized.v1"), fallbackFingerprint);

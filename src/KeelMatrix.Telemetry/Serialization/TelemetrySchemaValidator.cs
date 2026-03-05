@@ -16,11 +16,11 @@ namespace KeelMatrix.Telemetry.Serialization {
         /// <summary>
         /// Validates the given telemetry event.
         /// </summary>
-        internal static bool IsValid(TelemetryEventBase telemetryEvent) {
+        internal static bool IsValid(TelemetryEventBase telemetryEvent, string expectedToolName) {
             if (telemetryEvent.SchemaVersion != TelemetryConfig.SchemaVersion)
                 return false;
 
-            if (!string.Equals(telemetryEvent.Tool, TelemetryConfig.Runtime.ToolName, StringComparison.Ordinal))
+            if (!string.Equals(telemetryEvent.Tool, expectedToolName, StringComparison.Ordinal))
                 return false;
 
             if (telemetryEvent.ToolVersion.Length > TelemetryConfig.ToolVersionMaxLength)

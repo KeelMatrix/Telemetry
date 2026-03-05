@@ -1,10 +1,16 @@
 // Copyright (c) KeelMatrix
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
-    internal static class IdentityFingerprintPipeline {
-        internal static bool TryComputeIdentityFingerprintBytes(out byte[] fingerprintBytes) {
+    internal sealed class IdentityFingerprintPipeline {
+        private readonly CiGitIdentityFingerprint ciGitIdentityFingerprint;
+
+        internal IdentityFingerprintPipeline(RuntimeInfo runtimeInfo) {
+            ciGitIdentityFingerprint = new CiGitIdentityFingerprint(runtimeInfo);
+        }
+
+        internal bool TryComputeIdentityFingerprintBytes(out byte[] fingerprintBytes) {
             try {
-                if (CiGitIdentityFingerprint.TryCompute(out fingerprintBytes))
+                if (ciGitIdentityFingerprint.TryCompute(out fingerprintBytes))
                     return true;
             }
             catch { /* swallow */ }

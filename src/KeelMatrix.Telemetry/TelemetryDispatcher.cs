@@ -3,7 +3,6 @@
 using System.Globalization;
 using KeelMatrix.Telemetry.Events;
 using KeelMatrix.Telemetry.Infrastructure;
-using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry {
     /// <summary>
@@ -13,13 +12,20 @@ namespace KeelMatrix.Telemetry {
     internal sealed class TelemetryDispatcher {
         private readonly TelemetryState state;
         private readonly string projectHash;
+        private readonly TelemetryRuntimeContext runtimeContext;
+        private readonly RuntimeInfo runtimeInfo;
 
-        internal TelemetryDispatcher(string projectHash) {
+        internal TelemetryDispatcher(
+            TelemetryRuntimeContext runtimeContext,
+            RuntimeInfo runtimeInfo,
+            string projectHash) {
+            this.runtimeContext = runtimeContext;
+            this.runtimeInfo = runtimeInfo;
             this.projectHash = string.IsNullOrWhiteSpace(projectHash)
-                ? ProjectIdentityProvider.ComputeUninitializedPlaceholderHash()
+                ? new string('0', 64)
                 : projectHash;
 
-            state = new TelemetryState(this.projectHash);
+            state = new TelemetryState(runtimeContext.GetRootDirectory(), this.projectHash);
         }
 
         /// <summary>
@@ -34,14 +40,14 @@ namespace KeelMatrix.Telemetry {
                 return null;
 
             return new ActivationEvent(
-                TelemetryConfig.Runtime.ToolName,
-                TelemetryConfig.Runtime.ToolVersion,
+                runtimeContext.ToolName,
+                runtimeContext.ToolVersion,
                 TelemetryConfig.TelemetryVersion,
                 TelemetryConfig.SchemaVersion,
                 projectHash,
-                RuntimeInfo.Runtime,
-                RuntimeInfo.Os,
-                RuntimeInfo.IsCi,
+                runtimeInfo.Runtime,
+                runtimeInfo.Os,
+                runtimeInfo.IsCi,
                 DateTimeOffset.UtcNow.UtcDateTime.ToString(TelemetryConfig.TimestampFormat, CultureInfo.InvariantCulture));
         }
 
@@ -58,8 +64,8 @@ namespace KeelMatrix.Telemetry {
                 return null;
 
             return new HeartbeatEvent(
-                TelemetryConfig.Runtime.ToolName,
-                TelemetryConfig.Runtime.ToolVersion,
+                runtimeContext.ToolName,
+                runtimeContext.ToolVersion,
                 TelemetryConfig.TelemetryVersion,
                 TelemetryConfig.SchemaVersion,
                 projectHash,

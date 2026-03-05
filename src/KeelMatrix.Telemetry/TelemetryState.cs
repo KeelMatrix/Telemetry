@@ -12,9 +12,9 @@ namespace KeelMatrix.Telemetry {
         /// <summary>
         /// Initializes a new instance for the given project hash.
         /// </summary>
-        internal TelemetryState(string projectHash) {
+        internal TelemetryState(string rootDirectory, string projectHash) {
             this.projectHash = projectHash;
-            markerDir = Path.Combine(TelemetryConfig.Runtime.GetRootDirectory(), "markers");
+            markerDir = Path.Combine(rootDirectory, "markers");
             TryEnsureDirectory(markerDir);
             TryCleanup(markerDir);
         }
