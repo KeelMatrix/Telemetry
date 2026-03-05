@@ -59,7 +59,7 @@ Two event types are emitted:
 1. Activation (once per project identity)
 2. Heartbeat (once per project identity per ISO week)
 
-Each payload contains only:
+All events include only these base fields:
 
 - event
 - tool
@@ -67,11 +67,17 @@ Each payload contains only:
 - telemetryVersion
 - schemaVersion
 - projectHash (anonymous, non-reversible)
+
+Activation also includes:
+
 - runtime
 - os
 - ci flag
-- timestamp (activation only)
-- week (heartbeat only)
+- timestamp
+
+Heartbeat also includes:
+
+- week
 
 No user content, source code, SQL, file paths, usernames, hostnames, or IP addresses are collected.
 

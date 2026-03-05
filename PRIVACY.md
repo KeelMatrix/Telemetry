@@ -50,11 +50,11 @@ Common fields (all events):
 - `telemetryVersion` — the KeelMatrix.Telemetry version
 - `schemaVersion` — currently `1`
 - `projectHash` — a stable, anonymous hash derived from local project identity (not reversible)
+
+Activation-only:
 - `runtime` — runtime identifier (e.g., ".NET 8.0" normalized)
 - `os` — `"windows"`, `"linux"`, `"osx"`, or `"unknown"`
 - `ci` — boolean indicating whether a CI environment is detected
-
-Activation-only:
 - `timestamp` — UTC timestamp
 
 Heartbeat-only:
