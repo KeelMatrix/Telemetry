@@ -15,9 +15,7 @@ namespace KeelMatrix.Telemetry {
                 if (TelemetryConfig.IsTelemetryDisabled())
                     return new NullTelemetryClient();
 
-                var runtimeContext = new TelemetryRuntimeContext(toolName, toolType);
-                var runtimeInfo = new RuntimeInfo();
-                var worker = new TelemetryDeliveryWorker(runtimeContext, runtimeInfo);
+                var worker = TelemetryWorkerRegistry.GetOrCreate(toolName, toolType);
                 return new TelemetryClient(worker);
             }
             catch {
