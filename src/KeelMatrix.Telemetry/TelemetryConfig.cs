@@ -64,40 +64,42 @@ namespace KeelMatrix.Telemetry {
         private static int processDisabled; // 0/1
 
         internal static string ResolveRootDirectory(string toolNameUpper) {
+            var safeToolName = SanitizeToolNameForPath(toolNameUpper);
+
             try {
                 // 1) Preferred: LocalApplicationData (per-user, non-roaming).
                 var local = SafeGetFolderPath(Environment.SpecialFolder.LocalApplicationData);
                 if (IsUsableAbsolutePath(local))
-                    return Path.Combine(local, "KeelMatrix", toolNameUpper);
+                    return Path.Combine(local, "KeelMatrix", safeToolName);
 
                 // 2) Fallback: ApplicationData (roaming). Still per-user and usually writable.
                 var roaming = SafeGetFolderPath(Environment.SpecialFolder.ApplicationData);
                 if (IsUsableAbsolutePath(roaming))
-                    return Path.Combine(roaming, "KeelMatrix", toolNameUpper);
+                    return Path.Combine(roaming, "KeelMatrix", safeToolName);
 
                 // 3) Fallback: UserProfile (cross-platform). Use ".local/share" on Unix-like.
                 var userProfile = SafeGetFolderPath(Environment.SpecialFolder.UserProfile);
                 if (IsUsableAbsolutePath(userProfile)) {
                     if (Path.DirectorySeparatorChar != '\\') {
                         // ~/.local/share/KeelMatrix/{ToolNameUpper}
-                        return Path.Combine(userProfile, ".local", "share", "KeelMatrix", toolNameUpper);
+                        return Path.Combine(userProfile, ".local", "share", "KeelMatrix", safeToolName);
                     }
 
                     // Windows: keep it simple under user profile if nothing else is available.
-                    return Path.Combine(userProfile, "AppData", "Local", "KeelMatrix", toolNameUpper);
+                    return Path.Combine(userProfile, "AppData", "Local", "KeelMatrix", safeToolName);
                 }
 
                 // 4) Last resort: temp (always absolute).
                 var temp = Path.GetTempPath();
                 if (IsUsableAbsolutePath(temp))
-                    return Path.Combine(temp, "KeelMatrix", toolNameUpper);
+                    return Path.Combine(temp, "KeelMatrix", safeToolName);
             }
             catch {
                 // swallow and fall through to absolute temp fallback
             }
 
             // Absolute last line of defense: hard fallback to temp.
-            return Path.Combine(Path.GetTempPath(), "KeelMatrix", toolNameUpper);
+            return Path.Combine(Path.GetTempPath(), "KeelMatrix", safeToolName);
 
             static string SafeGetFolderPath(Environment.SpecialFolder folder) {
                 try { return Environment.GetFolderPath(folder) ?? string.Empty; }
@@ -123,6 +125,33 @@ namespace KeelMatrix.Telemetry {
                     return false;
                 }
             }
+        }
+
+        private static string SanitizeToolNameForPath(string? toolNameUpper) {
+            if (string.IsNullOrWhiteSpace(toolNameUpper))
+                return UnknownSymbol;
+
+            var trimmedToolName = toolNameUpper!.Trim();
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var builder = new System.Text.StringBuilder(trimmedToolName.Length);
+
+            foreach (var ch in trimmedToolName) {
+                if (ch == Path.DirectorySeparatorChar
+                    || ch == Path.AltDirectorySeparatorChar
+                    || Array.IndexOf(invalidChars, ch) >= 0
+                    || char.IsControl(ch)) {
+                    builder.Append('_');
+                }
+                else {
+                    builder.Append(ch);
+                }
+            }
+
+            var sanitized = builder.ToString().Trim().TrimEnd('.', ' ');
+            if (sanitized.Length == 0 || sanitized == "." || sanitized == "..")
+                return UnknownSymbol;
+
+            return sanitized;
         }
 
         internal static void DisableTelemetryForCurrentProcess() {

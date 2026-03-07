@@ -6,9 +6,6 @@ using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;
 
-// MachineSaltProvider and TelemetryConfig.Runtime are global/static in behavior.
-// Also, these tests intentionally touch environment variables.
-// Keep these tests non-parallel.
 [CollectionDefinition(Name, DisableParallelization = true)]
 public static class MachineSaltProviderIntegrationTestsCollectionDefinition {
     public const string Name = $"{nameof(MachineSaltProviderIntegrationTests)}.NonParallel";
@@ -27,9 +24,9 @@ public sealed class MachineSaltProviderIntegrationTests {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
 
-        using var runtime = IsolatedRuntime.Create();
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
 
-        var bytes = MachineSaltProvider.GetOrCreateMachineSaltBytes();
+        var bytes = runtime.CreateMachineSaltProvider().GetOrCreateMachineSaltBytes();
 
         bytes.Should().NotBeNull();
         bytes.Length.Should().Be(TelemetryConfig.ExpectedSaltBytes);
@@ -49,10 +46,11 @@ public sealed class MachineSaltProviderIntegrationTests {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
 
-        using var runtime = IsolatedRuntime.Create();
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
 
-        var first = MachineSaltProvider.GetOrCreateMachineSaltBytes();
-        var second = MachineSaltProvider.GetOrCreateMachineSaltBytes();
+        var provider = runtime.CreateMachineSaltProvider();
+        var first = provider.GetOrCreateMachineSaltBytes();
+        var second = provider.GetOrCreateMachineSaltBytes();
 
         first.Should().Equal(second);
 
@@ -66,12 +64,12 @@ public sealed class MachineSaltProviderIntegrationTests {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
 
-        using var runtime = IsolatedRuntime.Create();
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
 
         Directory.CreateDirectory(runtime.RootDir);
         File.WriteAllText(runtime.SaltPath, "not-hex", Encoding.UTF8);
 
-        var bytes = MachineSaltProvider.GetOrCreateMachineSaltBytes();
+        var bytes = runtime.CreateMachineSaltProvider().GetOrCreateMachineSaltBytes();
 
         bytes.Length.Should().Be(TelemetryConfig.ExpectedSaltBytes);
 
@@ -88,13 +86,13 @@ public sealed class MachineSaltProviderIntegrationTests {
         ClearOptOutVars();
         Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, "1");
 
-        using var runtime = IsolatedRuntime.Create();
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
 
         // Ensure the filesystem is clean before the call.
         Directory.Exists(runtime.RootDir).Should().BeFalse();
         File.Exists(runtime.SaltPath).Should().BeFalse();
 
-        var bytes = MachineSaltProvider.GetOrCreateMachineSaltBytes();
+        var bytes = runtime.CreateMachineSaltProvider().GetOrCreateMachineSaltBytes();
 
         bytes.Length.Should().Be(TelemetryConfig.ExpectedSaltBytes);
 
@@ -127,43 +125,4 @@ public sealed class MachineSaltProviderIntegrationTests {
         }
     }
 
-    private sealed class IsolatedRuntime : IDisposable {
-        public required string RootDir { get; init; }
-        public required string SaltPath { get; init; }
-
-        public static IsolatedRuntime Create() {
-            // ToolNameUpper is part of the per-user telemetry root: "KeelMatrix/{ToolNameUpper}".
-            var toolNameUpper = "INTEGRATIONTEST_" + Guid.NewGuid().ToString("N");
-            TelemetryConfig.Runtime.Set(toolNameUpper, typeof(MachineSaltProviderIntegrationTests));
-
-            // MachineSaltProvider currently expects the root directory to already be resolved.
-            // Resolution is compute-only and does not create directories.
-            TelemetryConfig.Runtime.EnsureRootDirectoryResolvedOnWorkerThread();
-
-            var root = TelemetryConfig.Runtime.GetRootDirectory();
-            var saltPath = Path.Combine(root, SaltFileName);
-
-            // Fresh per-test root.
-            TryDeleteDirectory(root);
-
-            return new IsolatedRuntime {
-                RootDir = root,
-                SaltPath = saltPath
-            };
-        }
-
-        public void Dispose() {
-            TryDeleteDirectory(RootDir);
-        }
-
-        private static void TryDeleteDirectory(string dir) {
-            try {
-                if (Directory.Exists(dir))
-                    Directory.Delete(dir, recursive: true);
-            }
-            catch {
-                // swallow
-            }
-        }
-    }
 }

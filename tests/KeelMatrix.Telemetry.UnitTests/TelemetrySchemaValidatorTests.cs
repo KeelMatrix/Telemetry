@@ -7,13 +7,6 @@ using KeelMatrix.Telemetry.Serialization;
 
 namespace KeelMatrix.Telemetry.UnitTests;
 
-// TelemetryConfig.Runtime is global static state. Keep these tests non-parallel.
-[CollectionDefinition(Name, DisableParallelization = true)]
-public static class TelemetrySchemaValidatorTestsCollectionDefinition {
-    public const string Name = $"{nameof(TelemetrySchemaValidatorTests)}.NonParallel";
-}
-
-[Collection(TelemetrySchemaValidatorTestsCollectionDefinition.Name)]
 public sealed class TelemetrySchemaValidatorTests {
     private static readonly string ValidTimestampUtc = new DateTimeOffset(2026, 02, 27, 0, 0, 0, TimeSpan.Zero)
         .UtcDateTime
@@ -21,20 +14,20 @@ public sealed class TelemetrySchemaValidatorTests {
 
     [Fact]
     public void IsValid_ReturnsFalse_WhenSchemaVersionMismatch() {
-        SetRuntimeTool("schema_test_tool");
+        var runtimeContext = CreateRuntimeContext("schema_test_tool");
 
-        var evt = CreateActivation(schemaVersion: TelemetryConfig.SchemaVersion + 1);
+        var evt = CreateActivation(runtimeContext, schemaVersion: TelemetryConfig.SchemaVersion + 1);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Fact]
     public void IsValid_ReturnsFalse_WhenToolNameDiffersFromRuntimeToolName() {
-        SetRuntimeTool("runtime_tool");
+        var runtimeContext = CreateRuntimeContext("runtime_tool");
 
         var evt = new ActivationEvent(
             tool: "different_tool",
-            toolVersion: "1.0.0",
+            toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
@@ -43,17 +36,17 @@ public sealed class TelemetrySchemaValidatorTests {
             ci: false,
             timestamp: ValidTimestampUtc);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Fact]
     public void IsValid_ReturnsFalse_WhenToolVersionTooLong() {
-        SetRuntimeTool("tool_version_len");
+        var runtimeContext = CreateRuntimeContext("tool_version_len");
 
         var tooLong = new string('a', TelemetryConfig.ToolVersionMaxLength + 1);
 
         var evt = new ActivationEvent(
-            tool: TelemetryConfig.Runtime.ToolName,
+            tool: runtimeContext.ToolName,
             toolVersion: tooLong,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
@@ -63,18 +56,18 @@ public sealed class TelemetrySchemaValidatorTests {
             ci: false,
             timestamp: ValidTimestampUtc);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Fact]
     public void IsValid_ReturnsFalse_WhenTelemetryVersionTooLong() {
-        SetRuntimeTool("telemetry_version_len");
+        var runtimeContext = CreateRuntimeContext("telemetry_version_len");
 
         var tooLong = new string('a', TelemetryConfig.ToolVersionMaxLength + 1);
 
         var evt = new ActivationEvent(
-            tool: TelemetryConfig.Runtime.ToolName,
-            toolVersion: "1.0.0",
+            tool: runtimeContext.ToolName,
+            toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: tooLong,
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
@@ -83,18 +76,18 @@ public sealed class TelemetrySchemaValidatorTests {
             ci: false,
             timestamp: ValidTimestampUtc);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Fact]
     public void IsValid_ReturnsFalse_WhenProjectHashTooLong() {
-        SetRuntimeTool("project_hash_len");
+        var runtimeContext = CreateRuntimeContext("project_hash_len");
 
         var tooLong = new string('a', TelemetryConfig.ProjectHashMaxLength + 1);
 
         var evt = new ActivationEvent(
-            tool: TelemetryConfig.Runtime.ToolName,
-            toolVersion: "1.0.0",
+            tool: runtimeContext.ToolName,
+            toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: tooLong,
@@ -103,17 +96,17 @@ public sealed class TelemetrySchemaValidatorTests {
             ci: false,
             timestamp: ValidTimestampUtc);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Theory]
     [MemberData(nameof(GetTooLongRuntimeOrOsCases))]
     public void Activation_Rejects_RuntimeOrOsTooLong(string runtime, string os) {
-        SetRuntimeTool("runtime_os_caps");
+        var runtimeContext = CreateRuntimeContext("runtime_os_caps");
 
         var evt = new ActivationEvent(
-            tool: TelemetryConfig.Runtime.ToolName,
-            toolVersion: "1.0.0",
+            tool: runtimeContext.ToolName,
+            toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
@@ -122,17 +115,17 @@ public sealed class TelemetrySchemaValidatorTests {
             ci: false,
             timestamp: ValidTimestampUtc);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Theory]
     [MemberData(nameof(GetBadTimestampCases))]
     public void Activation_Rejects_NonUtcOrWrongTimestampFormat(string timestamp) {
-        SetRuntimeTool("timestamp_rules");
+        var runtimeContext = CreateRuntimeContext("timestamp_rules");
 
         var evt = new ActivationEvent(
-            tool: TelemetryConfig.Runtime.ToolName,
-            toolVersion: "1.0.0",
+            tool: runtimeContext.ToolName,
+            toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
@@ -141,7 +134,7 @@ public sealed class TelemetrySchemaValidatorTests {
             ci: false,
             timestamp: timestamp);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Theory]
@@ -152,25 +145,25 @@ public sealed class TelemetrySchemaValidatorTests {
     [InlineData("2026-WAA")]    // non-numeric
     [InlineData("")]            // empty
     public void Heartbeat_Rejects_NonIsoWeekFormat(string week) {
-        SetRuntimeTool("week_format");
+        var runtimeContext = CreateRuntimeContext("week_format");
 
         var evt = new HeartbeatEvent(
-            tool: TelemetryConfig.Runtime.ToolName,
-            toolVersion: "1.0.0",
+            tool: runtimeContext.ToolName,
+            toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
             week: week);
 
-        TelemetrySchemaValidator.IsValid(evt).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
-    private static void SetRuntimeTool(string toolNameUpper) {
-        // Runtime.Set lowercases ToolName; validator requires telemetryEvent.Tool == Runtime.ToolName.
-        TelemetryConfig.Runtime.Set(toolNameUpper, typeof(TelemetrySchemaValidatorTests));
+    private static TelemetryRuntimeContext CreateRuntimeContext(string toolNameUpper) {
+        return new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetrySchemaValidatorTests));
     }
 
     private static ActivationEvent CreateActivation(
+        TelemetryRuntimeContext runtimeContext,
         int? schemaVersion = null,
         string? tool = null,
         string? toolVersion = null,
@@ -180,10 +173,9 @@ public sealed class TelemetrySchemaValidatorTests {
         string? os = null,
         bool? ci = null,
         string? timestamp = null) {
-        // Assumes Runtime has already been set.
         return new ActivationEvent(
-            tool: tool ?? TelemetryConfig.Runtime.ToolName,
-            toolVersion: toolVersion ?? "1.0.0",
+            tool: tool ?? runtimeContext.ToolName,
+            toolVersion: toolVersion ?? runtimeContext.ToolVersion,
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
             projectHash: projectHash ?? "abc",

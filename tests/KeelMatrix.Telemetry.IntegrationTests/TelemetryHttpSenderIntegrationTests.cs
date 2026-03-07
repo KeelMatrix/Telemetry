@@ -31,8 +31,9 @@ public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
     [Fact]
     public async Task TrySendAsync_ReturnsTrue_On2xxFromLocalServer() {
         server.ResponseStatusCode = HttpStatusCode.OK;
+        using var sender = new TelemetryHttpSender(server.Url);
 
-        var ok = await TelemetryHttpSender.TrySendAsync("{}", CancellationToken.None);
+        var ok = await sender.TrySendAsync("{}", CancellationToken.None);
 
         ok.Should().BeTrue();
         server.Received.Count.Should().Be(1);
@@ -51,8 +52,9 @@ public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
     [InlineData(HttpStatusCode.ServiceUnavailable)]
     public async Task TrySendAsync_ReturnsFalse_OnNon2xx(HttpStatusCode statusCode) {
         server.ResponseStatusCode = statusCode;
+        using var sender = new TelemetryHttpSender(server.Url);
 
-        var ok = await TelemetryHttpSender.TrySendAsync("{}", CancellationToken.None);
+        var ok = await sender.TrySendAsync("{}", CancellationToken.None);
 
         ok.Should().BeFalse();
         server.Received.Count.Should().Be(1);
@@ -62,10 +64,10 @@ public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
     public async Task TrySendAsync_ReturnsFalse_OnConnectionFailure_NoThrow() {
         // Ensure a port that has no listener.
         int unusedPort = GetUnusedTcpPort();
-        TelemetryConfig.SetUrlOverrideForTests(new Uri($"http://127.0.0.1:{unusedPort}/"));
+        using var sender = new TelemetryHttpSender(new Uri($"http://127.0.0.1:{unusedPort}/"));
 
         Func<Task> act = async () => {
-            var ok = await TelemetryHttpSender.TrySendAsync("{}", CancellationToken.None);
+            var ok = await sender.TrySendAsync("{}", CancellationToken.None);
             ok.Should().BeFalse();
         };
 

@@ -84,35 +84,64 @@ public sealed class TelemetryConfigTests {
     }
 
     [Fact]
-    public void Runtime_Set_SetsToolNameLowercase_AndResetsRootDirectory() {
+    public void RuntimeContext_SetsToolNameLowercase_AndKeepsRootDirectoryUnresolvedUntilWorkerThread() {
         // Use a unique tool name so we never collide with other test state.
         var toolNameUpper = "UNITTEST_" + Guid.NewGuid().ToString("N");
 
-        TelemetryConfig.Runtime.Set(toolNameUpper, typeof(TelemetryConfigTests));
+        var runtimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryConfigTests));
 
-        TelemetryConfig.Runtime.ToolName.Should().Be(toolNameUpper.ToLowerInvariant());
+        runtimeContext.ToolName.Should().Be(toolNameUpper.ToLowerInvariant());
 
         // RootDirectory must be cleared to null so that caller thread does no I/O.
-        Action act = static () => _ = TelemetryConfig.Runtime.GetRootDirectory();
+        Action act = () => _ = runtimeContext.GetRootDirectory();
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("Telemetry root directory has not been resolved yet.");
     }
 
     [Fact]
-    public void Runtime_EnsureRootDirectoryResolvedOnWorkerThread_ProducesRootedPath() {
+    public void RuntimeContext_EnsureRootDirectoryResolvedOnWorkerThread_ProducesRootedPath() {
         var toolNameUpper = "UNITTEST_" + Guid.NewGuid().ToString("N");
 
-        TelemetryConfig.Runtime.Set(toolNameUpper, typeof(TelemetryConfigTests));
+        var runtimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryConfigTests));
 
-        TelemetryConfig.Runtime.EnsureRootDirectoryResolvedOnWorkerThread();
+        runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
 
-        var root = TelemetryConfig.Runtime.GetRootDirectory();
+        var root = runtimeContext.GetRootDirectory();
 
         Path.IsPathRooted(root).Should().BeTrue();
 
         // Do not assert the OS-specific base directory, only that it contains "KeelMatrix/{ToolNameUpper}".
         var expectedSuffix = Path.Combine("KeelMatrix", toolNameUpper);
         root.Should().Contain(expectedSuffix);
+    }
+
+    [Theory]
+    [InlineData(@"..\escape")]
+    [InlineData(@"nested/tool")]
+    [InlineData(@"nested\tool")]
+    [InlineData(@"C:\absolute\tool")]
+    [InlineData(@"\\server\share\tool")]
+    [InlineData("tool<>:\"/\\\\|?*name")]
+    public void ResolveRootDirectory_SanitizesUnsafeToolNames_AndKeepsThemUnderTelemetryBase(string toolName) {
+        var safeRoot = TelemetryConfig.ResolveRootDirectory("BASELINE_TOOL");
+        var root = TelemetryConfig.ResolveRootDirectory(toolName);
+
+        Path.IsPathRooted(root).Should().BeTrue();
+
+        var telemetryBase = Path.GetDirectoryName(safeRoot);
+        telemetryBase.Should().NotBeNullOrWhiteSpace();
+        root.Should().StartWith(telemetryBase + Path.DirectorySeparatorChar);
+
+        var leaf = Path.GetFileName(root);
+        leaf.Should().NotBeNullOrWhiteSpace();
+        leaf.Should().NotBe(".");
+        leaf.Should().NotBe("..");
+
+        foreach (var invalidChar in Path.GetInvalidFileNameChars())
+            leaf.Should().NotContain(invalidChar.ToString());
+
+        leaf.Should().NotContain(Path.DirectorySeparatorChar.ToString());
+        leaf.Should().NotContain(Path.AltDirectorySeparatorChar.ToString());
     }
 
     public static TheoryData<string> GetTruthyValues() {

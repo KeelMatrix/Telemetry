@@ -108,9 +108,9 @@ public sealed class ClientEndToEndIntegrationTests {
         public void Dispose() {
             // Best-effort cleanup of the per-test telemetry root.
             try {
-                TelemetryConfig.Runtime.Set(ToolNameUpper, typeof(ClientEndToEndIntegrationTests));
-                TelemetryConfig.Runtime.EnsureRootDirectoryResolvedOnWorkerThread();
-                RootDir = TelemetryConfig.Runtime.GetRootDirectory();
+                var runtimeContext = new TelemetryRuntimeContext(ToolNameUpper, typeof(ClientEndToEndIntegrationTests));
+                runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
+                RootDir = runtimeContext.GetRootDirectory();
             }
             catch {
                 RootDir = null;

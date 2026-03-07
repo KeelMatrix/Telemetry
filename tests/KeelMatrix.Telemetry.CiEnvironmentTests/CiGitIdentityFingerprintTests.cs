@@ -20,9 +20,9 @@ public sealed class CiGitIdentityFingerprintTests {
             ("GITHUB_SERVER_URL", "https://GitHub.com"),
             ("GITHUB_REPOSITORY", "KeelMatrix/Telemetry"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
 
         bytes.Should().Equal(ExpectedCiFingerprint("https://github.com/keelmatrix/telemetry"));
     }
@@ -33,9 +33,9 @@ public sealed class CiGitIdentityFingerprintTests {
             ("CI", "true"),
             ("CI_PROJECT_URL", "https://gitlab.com/Group/SubGroup/Repo.git"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://gitlab.com/group/subgroup/repo"));
     }
 
@@ -46,9 +46,9 @@ public sealed class CiGitIdentityFingerprintTests {
             ("CI_SERVER_URL", "https://gitlab.example.com/"),
             ("CI_PROJECT_PATH", "Group/Repo"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://gitlab.example.com/group/repo"));
     }
 
@@ -59,9 +59,9 @@ public sealed class CiGitIdentityFingerprintTests {
             ("SYSTEM_COLLECTIONURI", "https://dev.azure.com/Org/"),
             ("BUILD_REPOSITORY_NAME", "Project/Repo"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://dev.azure.com/org/project/repo"));
     }
 
@@ -71,9 +71,9 @@ public sealed class CiGitIdentityFingerprintTests {
             ("CI", "true"),
             ("BUILD_REPOSITORY_URI", "https://dev.azure.com/Org/Project/_git/Repo"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://dev.azure.com/org/project/_git/repo"));
     }
 
@@ -84,9 +84,9 @@ public sealed class CiGitIdentityFingerprintTests {
             ("BITBUCKET_GIT_HTTP_ORIGIN", "https://bitbucket.org"),
             ("BITBUCKET_REPO_FULL_NAME", "Workspace/Repo"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://bitbucket.org/workspace/repo"));
     }
 
@@ -98,18 +98,18 @@ public sealed class CiGitIdentityFingerprintTests {
             ("BITBUCKET_WORKSPACE", "Workspace"),
             ("BITBUCKET_REPO_SLUG", "Repo"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://bitbucket.org/workspace/repo"));
     }
 
     [Fact]
     public void TryComputeFromCi_ReturnsFalse_WhenNoProviderVarsPresent() {
         using var _ = EnvVarScope.Clean(("CI", "true"));
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var _).Should().BeFalse();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var _).Should().BeFalse();
     }
 
     [Fact]
@@ -121,21 +121,22 @@ public sealed class CiGitIdentityFingerprintTests {
             ("GITHUB_SERVER_URL", "SSH://GitHub.COM"),
             ("GITHUB_REPOSITORY", "KeelMatrix/Telemetry.Git"));
 
-        using var __ = new RuntimeInfoCiScope(isCi: true);
+        using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
-        InvokeTryComputeFromCi(out var bytes).Should().BeTrue();
+        InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
         bytes.Should().Equal(ExpectedCiFingerprint("https://github.com/keelmatrix/telemetry"));
     }
 
-    private static bool InvokeTryComputeFromCi(out byte[] fingerprintBytes) {
+    private static bool InvokeTryComputeFromCi(RuntimeInfo runtimeInfo, out byte[] fingerprintBytes) {
         var mi = typeof(CiGitIdentityFingerprint).GetMethod(
             "TryComputeFromCi",
-            BindingFlags.NonPublic | BindingFlags.Static);
+            BindingFlags.NonPublic | BindingFlags.Instance);
 
         mi.Should().NotBeNull();
 
+        var fingerprint = new CiGitIdentityFingerprint(runtimeInfo);
         object?[] args = [null!];
-        var ok = (bool)mi!.Invoke(null, args)!;
+        var ok = (bool)mi!.Invoke(fingerprint, args)!;
         fingerprintBytes = (byte[])args[0]!;
         return ok;
     }
@@ -197,12 +198,14 @@ public sealed class CiGitIdentityFingerprintTests {
     }
 
     private sealed class RuntimeInfoCiScope : IDisposable {
+        public RuntimeInfo Info { get; } = new();
+
         public RuntimeInfoCiScope(bool isCi) {
-            RuntimeInfo.SetCiOverrideForTests(isCi);
+            Info.SetCiOverrideForTests(isCi);
         }
 
         public void Dispose() {
-            RuntimeInfo.SetCiOverrideForTests(null);
+            Info.SetCiOverrideForTests(null);
         }
     }
 }

@@ -1,5 +1,6 @@
 // Copyright (c) KeelMatrix
 
+using System.Text;
 using FluentAssertions;
 using KeelMatrix.Telemetry.ProjectIdentity;
 
@@ -77,5 +78,78 @@ public sealed class RepoKeyNormalizerTests {
         normalized.Should().Be(expected);
 
         normalized.Should().Contain(expectedPort);
+    }
+
+    [Theory]
+    [InlineData("https://user:token@github.com/Owner/Repo.git", "https://github.com/owner/repo")]
+    [InlineData("http://user:token@gitlab.example.com/Group/Repo", "https://gitlab.example.com/group/repo")]
+    [InlineData("ssh://buildbot@git.example.com/Owner/Repo.git", "https://git.example.com/owner/repo")]
+    [InlineData("git://user:password@git.example.com/Owner/Repo.git", "https://git.example.com/owner/repo")]
+    public void TryNormalize_StripsCredentialsFromUrlLikeInputs(string input, string expected) {
+        RepoKeyNormalizer.TryNormalize(input, out var normalized).Should().BeTrue();
+        normalized.Should().Be(expected);
+
+        Uri.TryCreate(normalized, UriKind.Absolute, out var uri).Should().BeTrue();
+        uri!.UserInfo.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TryNormalize_FuzzInputs_NeverThrow_AndProducesStableCredentialFreeResults() {
+        var random = new Random(12345);
+
+        foreach (var input in GenerateFuzzInputs(random, 300)) {
+            bool firstOk = false;
+            string? firstNormalized = null;
+
+            var act = () => firstOk = RepoKeyNormalizer.TryNormalize(input, out firstNormalized);
+            act.Should().NotThrow($"input '{input}' should never crash normalization");
+
+            var secondOk = RepoKeyNormalizer.TryNormalize(input, out var secondNormalized);
+            secondOk.Should().Be(firstOk, $"input '{input}' should be stable across calls");
+            secondNormalized.Should().Be(firstNormalized);
+
+            if (!firstOk) {
+                firstNormalized.Should().BeNull();
+                continue;
+            }
+
+            firstNormalized.Should().Be(firstNormalized!.ToLowerInvariant());
+            firstNormalized.Should().NotContain("@");
+
+            if (Uri.TryCreate(firstNormalized, UriKind.Absolute, out var normalizedUri)) {
+                normalizedUri.Scheme.Should().Be("https");
+                normalizedUri.UserInfo.Should().BeEmpty();
+            }
+        }
+    }
+
+    private static IEnumerable<string> GenerateFuzzInputs(Random random, int count) {
+        const string pathChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+
+        for (int i = 0; i < count; i++) {
+            int shape = i % 6;
+            string owner = RandomSegment(random, pathChars, 3, 10);
+            string repo = RandomSegment(random, pathChars, 3, 12);
+            string host = $"{RandomSegment(random, "abcdefghijklmnopqrstuvwxyz", 4, 8)}.{RandomSegment(random, "abcdefghijklmnopqrstuvwxyz", 3, 6)}";
+
+            yield return shape switch {
+                0 => $"https://{host}/{owner}/{repo}.git",
+                1 => $"ssh://user:{RandomSegment(random, pathChars, 6, 12)}@{host}/{owner}/{repo}",
+                2 => $"git@{host}:{owner}/{repo}.git",
+                3 => $"{RandomSegment(random, pathChars + ":/@\\?&% ", 5, 30)}",
+                4 => $"http://{host}:{random.Next(1, 65536)}/{owner}/{repo}/",
+                _ => $"git://user:password@{host}/{owner}/{repo}.git"
+            };
+        }
+    }
+
+    private static string RandomSegment(Random random, string alphabet, int minLength, int maxLength) {
+        int length = random.Next(minLength, maxLength + 1);
+        var builder = new StringBuilder(length);
+
+        for (int i = 0; i < length; i++)
+            builder.Append(alphabet[random.Next(alphabet.Length)]);
+
+        return builder.ToString();
     }
 }
