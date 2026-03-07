@@ -11,7 +11,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     internal sealed class TelemetryDeliveryWorker : IDisposable {
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly RuntimeInfo runtimeInfo;
-        private readonly ProjectIdentityProvider projectIdentityProvider;
+        private readonly IProjectIdentityProvider projectIdentityProvider;
         private readonly ITelemetryQueue queue;
         private readonly TelemetryHttpSender httpSender;
 
@@ -40,10 +40,17 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private readonly Task _workerTask; // left for observing a potential exception during debug
 #pragma warning restore S4487
 
-        internal TelemetryDeliveryWorker(TelemetryRuntimeContext runtimeContext, RuntimeInfo runtimeInfo) {
+        internal TelemetryDeliveryWorker(TelemetryRuntimeContext runtimeContext, RuntimeInfo runtimeInfo)
+            : this(runtimeContext, runtimeInfo, new ProjectIdentityProvider(runtimeContext, runtimeInfo)) {
+        }
+
+        internal TelemetryDeliveryWorker(
+            TelemetryRuntimeContext runtimeContext,
+            RuntimeInfo runtimeInfo,
+            IProjectIdentityProvider projectIdentityProvider) {
             this.runtimeContext = runtimeContext;
             this.runtimeInfo = runtimeInfo;
-            projectIdentityProvider = new ProjectIdentityProvider(runtimeContext, runtimeInfo);
+            this.projectIdentityProvider = projectIdentityProvider ?? throw new ArgumentNullException(nameof(projectIdentityProvider));
             queue = DurableTelemetryQueue.CreateSafe(runtimeContext);
             httpSender = new TelemetryHttpSender(runtimeContext.Url);
 
@@ -116,7 +123,9 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         projectHashComputed = true;
                     }
                     catch {
-                        // swallow; retry on a future worker cycle
+                        // Broken identity state must hard-disable telemetry so we never emit
+                        // under a placeholder or partial project identity.
+                        TelemetryConfig.DisableTelemetryForCurrentProcess();
                     }
                 }
 
@@ -200,15 +209,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 projectHash = projectIdentityProvider.EnsureComputedOnWorkerThread();
             }
             catch {
-                // Skip the cycle if identity is unavailable and retry on a future cycle.
-                if (doActivation) {
-                    Interlocked.Exchange(ref activationRequested, 1);
-                }
-
-                if (doHeartbeat) {
-                    Interlocked.Exchange(ref heartbeatRequested, 1);
-                }
-
+                // Broken identity state must prevent all emission for this process.
+                TelemetryConfig.DisableTelemetryForCurrentProcess();
                 return;
             }
 

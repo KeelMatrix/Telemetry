@@ -1,6 +1,7 @@
 // Copyright (c) KeelMatrix
 
 using KeelMatrix.Telemetry.Infrastructure;
+using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry {
     public sealed class Client {
@@ -10,12 +11,38 @@ namespace KeelMatrix.Telemetry {
             client = CreateClient(toolName, toolType);
         }
 
+        internal Client(
+            string toolName,
+            Type toolType,
+            Func<TelemetryRuntimeContext, RuntimeInfo, IProjectIdentityProvider> projectIdentityProviderFactory) {
+            client = CreateClient(toolName, toolType, projectIdentityProviderFactory);
+        }
+
         private static ITelemetryClient CreateClient(string toolName, Type toolType) {
+            return CreateClient(toolName, toolType, projectIdentityProviderFactory: null);
+        }
+
+        private static ITelemetryClient CreateClient(
+            string toolName,
+            Type toolType,
+            Func<TelemetryRuntimeContext, RuntimeInfo, IProjectIdentityProvider>? projectIdentityProviderFactory) {
             try {
                 if (TelemetryConfig.IsTelemetryDisabled())
                     return new NullTelemetryClient();
 
-                var worker = TelemetryWorkerRegistry.GetOrCreate(toolName, toolType);
+                TelemetryDeliveryWorker worker;
+                if (projectIdentityProviderFactory is null) {
+                    worker = TelemetryWorkerRegistry.GetOrCreate(toolName, toolType);
+                }
+                else {
+                    var runtimeContext = new TelemetryRuntimeContext(toolName, toolType);
+                    var runtimeInfo = new RuntimeInfo();
+                    worker = new TelemetryDeliveryWorker(
+                        runtimeContext,
+                        runtimeInfo,
+                        projectIdentityProviderFactory(runtimeContext, runtimeInfo));
+                }
+
                 return new TelemetryClient(worker);
             }
             catch {

@@ -10,7 +10,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
     /// Computes and caches a stable, anonymous per-project hash for a telemetry client instance.
     /// All I/O and identity detection MUST run on the telemetry worker thread.
     /// </summary>
-    internal sealed class ProjectIdentityProvider {
+    internal sealed class ProjectIdentityProvider : IProjectIdentityProvider {
         private readonly MachineSaltProvider machineSaltProvider;
         private readonly IdentityFingerprintPipeline identityFingerprintPipeline;
         private readonly string uninitializedPlaceholderHash;
@@ -28,7 +28,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         /// Ensures the project hash is computed and cached.
         /// MUST be called only from the telemetry worker thread.
         /// </summary>
-        internal string EnsureComputedOnWorkerThread() {
+        public string EnsureComputedOnWorkerThread() {
             if (Volatile.Read(ref isComputed) == 1)
                 return cachedProjectHash ?? throw new InvalidOperationException("Project hash was marked computed but cache is empty.");
 
