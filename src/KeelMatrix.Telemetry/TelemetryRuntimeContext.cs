@@ -6,19 +6,18 @@ namespace KeelMatrix.Telemetry {
     /// </summary>
     internal sealed class TelemetryRuntimeContext {
         private readonly string toolNameUpper;
-        private readonly Uri url;
         private string? rootDirectory;
 
         internal TelemetryRuntimeContext(string toolName, Type toolType) {
             toolNameUpper = toolName;
             ToolVersion = toolType.Assembly.GetName().Version?.ToString() ?? TelemetryConfig.UnknownSymbol;
             ToolName = toolNameUpper.ToLowerInvariant();
-            url = TelemetryConfig.Url;
+            Url = TelemetryConfig.Url;
         }
 
         internal string ToolVersion { get; }
         internal string ToolName { get; }
-        internal Uri Url => url;
+        internal Uri Url { get; }
 
         internal string GetRootDirectory() {
             return Volatile.Read(ref rootDirectory)

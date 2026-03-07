@@ -4,12 +4,10 @@ using System.Runtime.InteropServices;
 
 namespace KeelMatrix.Telemetry {
     internal sealed class RuntimeInfo {
-        private readonly string runtime = DetectRuntime();
-        private readonly string os = DetectOs();
         private readonly bool detectedCi = DetectCi();
 
-        internal string Runtime => runtime;
-        internal string Os => os;
+        internal string Runtime { get; } = DetectRuntime();
+        internal string Os { get; } = DetectOs();
 
         // -1 = no override, 0 = false, 1 = true
         private int ciOverride = -1;

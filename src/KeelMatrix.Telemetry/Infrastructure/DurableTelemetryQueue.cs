@@ -338,7 +338,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 }
             }
             catch {
-                return Array.Empty<string>();
+                return [];
             }
 
             files.Sort(static (a, b) => {

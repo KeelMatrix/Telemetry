@@ -11,8 +11,6 @@ public static class TelemetryStateMarkerTestsCollectionDefinition {
 
 [Collection(TelemetryStateMarkerTestsCollectionDefinition.Name)]
 public sealed class TelemetryStateMarkerTests {
-    private const string MarkerSubdir = "markers";
-
     [Fact]
     public void ShouldSendActivation_True_WhenNoMarker() {
         using var runtime = TestRuntimeScope.Create(typeof(TelemetryStateMarkerTests));

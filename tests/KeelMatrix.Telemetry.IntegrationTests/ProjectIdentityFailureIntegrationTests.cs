@@ -89,7 +89,10 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         public LocalTelemetryServer Server { get; }
         public TelemetryRuntimeContext RuntimeContext { get; }
         public RuntimeInfo RuntimeInfo { get; }
+#pragma warning disable S2325 // Methods and properties that don't access instance data should be static
+#pragma warning disable CA1822 // Mark members as static
         public string CurrentWeek => TelemetryClock.GetCurrentIsoWeek();
+#pragma warning restore CA1822, S2325
         public string MarkersDir => Path.Combine(rootDir, "markers");
         public string PendingDir => Path.Combine(rootDir, "telemetry.queue", "pending");
         public string ProcessingDir => Path.Combine(rootDir, "telemetry.queue", "processing");
@@ -130,9 +133,9 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         }
 
         private static void ResetProcessDisabledForTests() {
-            var field = typeof(TelemetryConfig).GetField("processDisabled", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            if (field is not null)
-                field.SetValue(null, 0);
+            var field = typeof(TelemetryConfig).GetField("processDisabled",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            field?.SetValue(null, 0);
         }
 
         private static void TryDeleteDirectory(string dir) {

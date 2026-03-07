@@ -68,6 +68,7 @@ dotnet_diagnostic.S1075.severity = none    # Hardcode absolute paths or URI
 dotnet_diagnostic.CA1707.severity = none   # allow underscores in identifiers (test names)
 dotnet_diagnostic.CS1591.severity = none   # missing XML docs off in tests
 dotnet_diagnostic.IDE0290.severity = none  # disable “Use primary constructor”
+dotnet_diagnostic.IDE0028.severity = none  # Collection initialization can be simplified
 
 # =====================================================================================
 # Configuration-specific severity settings

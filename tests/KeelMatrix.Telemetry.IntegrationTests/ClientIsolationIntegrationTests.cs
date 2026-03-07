@@ -15,17 +15,17 @@ public sealed class ClientIsolationIntegrationTests {
     [Fact]
     public async Task Clients_WithSameToolName_ReuseTheSameWorker_AndEmitSingleActivation() {
         using var harness = new ClientHarness();
-        var toolNameUpper = harness.CreateToolName("SAME");
+        var toolNameUpper = ClientHarness.CreateToolName("SAME");
 
         var firstClient = harness.CreateClient(toolNameUpper);
         var secondClient = harness.CreateClient(toolNameUpper);
 
-        var firstWorker = harness.GetWorker(firstClient);
-        var secondWorker = harness.GetWorker(secondClient);
+        var firstWorker = ClientHarness.GetWorker(firstClient);
+        var secondWorker = ClientHarness.GetWorker(secondClient);
 
         firstWorker.Should().BeSameAs(secondWorker);
 
-        var rootDir = harness.GetRootDirectory(firstWorker);
+        var rootDir = ClientHarness.GetRootDirectory(firstWorker);
 
         firstClient.TrackActivation();
         secondClient.TrackActivation();
@@ -42,19 +42,19 @@ public sealed class ClientIsolationIntegrationTests {
     [Fact]
     public async Task Clients_WithDifferentToolNames_UseDifferentWorkers_AndSeparateRoots() {
         using var harness = new ClientHarness();
-        var firstToolNameUpper = harness.CreateToolName("ALPHA");
-        var secondToolNameUpper = harness.CreateToolName("BETA");
+        var firstToolNameUpper = ClientHarness.CreateToolName("ALPHA");
+        var secondToolNameUpper = ClientHarness.CreateToolName("BETA");
 
         var firstClient = harness.CreateClient(firstToolNameUpper);
         var secondClient = harness.CreateClient(secondToolNameUpper);
 
-        var firstWorker = harness.GetWorker(firstClient);
-        var secondWorker = harness.GetWorker(secondClient);
+        var firstWorker = ClientHarness.GetWorker(firstClient);
+        var secondWorker = ClientHarness.GetWorker(secondClient);
 
         firstWorker.Should().NotBeSameAs(secondWorker);
 
-        var firstRootDir = harness.GetRootDirectory(firstWorker);
-        var secondRootDir = harness.GetRootDirectory(secondWorker);
+        var firstRootDir = ClientHarness.GetRootDirectory(firstWorker);
+        var secondRootDir = ClientHarness.GetRootDirectory(secondWorker);
 
         firstRootDir.Should().NotBe(secondRootDir);
 
@@ -80,11 +80,11 @@ public sealed class ClientIsolationIntegrationTests {
     [Fact]
     public async Task ConcurrentTrackCalls_DoNotDeadlock_AndOnlyEmitSingleActivationPerProject() {
         using var harness = new ClientHarness();
-        var toolNameUpper = harness.CreateToolName("RACE");
+        var toolNameUpper = ClientHarness.CreateToolName("RACE");
 
         var client = harness.CreateClient(toolNameUpper);
-        var worker = harness.GetWorker(client);
-        var rootDir = harness.GetRootDirectory(worker);
+        var worker = ClientHarness.GetWorker(client);
+        var rootDir = ClientHarness.GetRootDirectory(worker);
 
         var calls = Enumerable.Range(0, 64)
             .Select(_ => Task.Run(() => {
@@ -159,7 +159,7 @@ public sealed class ClientIsolationIntegrationTests {
 
         public LocalTelemetryServer Server { get; }
 
-        public string CreateToolName(string prefix) {
+        public static string CreateToolName(string prefix) {
             return $"CLIENT_{prefix}_{Guid.NewGuid():N}";
         }
 
@@ -171,7 +171,7 @@ public sealed class ClientIsolationIntegrationTests {
             return client;
         }
 
-        public TelemetryDeliveryWorker GetWorker(Client client) {
+        public static TelemetryDeliveryWorker GetWorker(Client client) {
             var inner = GetInnerTelemetryClient(client);
             inner.Should().BeOfType<TelemetryClient>();
 
@@ -180,7 +180,7 @@ public sealed class ClientIsolationIntegrationTests {
             return (TelemetryDeliveryWorker)workerField!.GetValue(inner)!;
         }
 
-        public string GetRootDirectory(TelemetryDeliveryWorker worker) {
+        public static string GetRootDirectory(TelemetryDeliveryWorker worker) {
             var runtimeContextField = typeof(TelemetryDeliveryWorker).GetField("runtimeContext", BindingFlags.Instance | BindingFlags.NonPublic);
             runtimeContextField.Should().NotBeNull();
 

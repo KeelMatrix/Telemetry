@@ -66,7 +66,6 @@ internal sealed class TestRuntimeScope : IDisposable {
 
     private static void ResetProcessDisabledForTests() {
         var field = typeof(TelemetryConfig).GetField("processDisabled", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-        if (field is not null)
-            field.SetValue(null, 0);
+        field?.SetValue(null, 0);
     }
 }

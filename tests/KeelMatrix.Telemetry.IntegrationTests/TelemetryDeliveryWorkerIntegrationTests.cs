@@ -161,7 +161,10 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         public string PendingDir => Path.Combine(rootDir, "telemetry.queue", "pending");
         public string ProcessingDir => Path.Combine(rootDir, "telemetry.queue", "processing");
         public string MarkersDir => Path.Combine(rootDir, "markers");
+#pragma warning disable S2325 // Methods and properties that don't access instance data should be static
+#pragma warning disable CA1822 // Mark members as static
         public string CurrentWeek => TelemetryClock.GetCurrentIsoWeek();
+#pragma warning restore CA1822, S2325
 
         public ITelemetryQueue CreateQueue() {
             return DurableTelemetryQueue.CreateSafe(RuntimeContext);
@@ -191,8 +194,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         private static void ResetProcessDisabledForTests() {
             var field = typeof(TelemetryConfig).GetField("processDisabled", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            if (field is not null)
-                field.SetValue(null, 0);
+            field?.SetValue(null, 0);
         }
     }
 

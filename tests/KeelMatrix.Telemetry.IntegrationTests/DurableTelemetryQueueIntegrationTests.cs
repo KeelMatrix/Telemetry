@@ -2,7 +2,6 @@
 
 using System.Globalization;
 using FluentAssertions;
-using KeelMatrix.Telemetry.Infrastructure;
 using KeelMatrix.Telemetry.Storage;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;

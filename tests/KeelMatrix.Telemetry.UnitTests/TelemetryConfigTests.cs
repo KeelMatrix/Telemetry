@@ -117,7 +117,7 @@ public sealed class TelemetryConfigTests {
 
     [Theory]
     [InlineData(@"..\escape")]
-    [InlineData(@"nested/tool")]
+    [InlineData("nested/tool")]
     [InlineData(@"nested\tool")]
     [InlineData(@"C:\absolute\tool")]
     [InlineData(@"\\server\share\tool")]

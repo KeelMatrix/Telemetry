@@ -185,36 +185,44 @@ public sealed class TelemetrySchemaValidatorTests {
             timestamp: timestamp ?? ValidTimestampUtc);
     }
 
-    public static IEnumerable<object[]> GetTooLongRuntimeOrOsCases() {
-        var okRuntime = "dotnet";
-        var okOs = "linux";
+    public static TheoryData<string, string> GetTooLongRuntimeOrOsCases()
+    {
+        const string okRuntime = "dotnet";
+        const string okOs = "linux";
 
-        yield return [new string('r', TelemetryConfig.RuntimeMaxLength + 1), okOs];
-        yield return [okRuntime, new string('o', TelemetryConfig.OsMaxLength + 1)];
-        yield return [new string('r', TelemetryConfig.RuntimeMaxLength + 1), new string('o', TelemetryConfig.OsMaxLength + 1)];
+        var data = new TheoryData<string, string>();
+        data.Add(new string('r', TelemetryConfig.RuntimeMaxLength + 1), okOs);
+        data.Add(okRuntime, new string('o', TelemetryConfig.OsMaxLength + 1));
+        data.Add(new string('r', TelemetryConfig.RuntimeMaxLength + 1), new string('o', TelemetryConfig.OsMaxLength + 1));
+        return data;
     }
 
-    public static IEnumerable<object[]> GetBadTimestampCases() {
+    public static TheoryData<string> GetBadTimestampCases()
+    {
+        var data = new TheoryData<string>();
+
         // Wrong format (space instead of 'T')
-        yield return ["2026-02-27 00:00:00Z"];
+        data.Add("2026-02-27 00:00:00Z");
 
         // Wrong format (milliseconds)
-        yield return ["2026-02-27T00:00:00.000Z"];
+        data.Add("2026-02-27T00:00:00.000Z");
 
         // Wrong format (missing seconds)
-        yield return ["2026-02-27T00:00Z"];
+        data.Add("2026-02-27T00:00Z");
 
         // Wrong format (no Z)
-        yield return ["2026-02-27T00:00:00"];
+        data.Add("2026-02-27T00:00:00");
 
         // Wrong format (offset instead of literal Z)
-        yield return ["2026-02-27T00:00:00+00:00"];
+        data.Add("2026-02-27T00:00:00+00:00");
 
         // Empty / whitespace
-        yield return [""];
-        yield return ["   "];
+        data.Add("");
+        data.Add("   ");
 
         // Not a date
-        yield return ["not-a-timestamp"];
+        data.Add("not-a-timestamp");
+
+        return data;
     }
 }

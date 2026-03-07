@@ -2,7 +2,6 @@
 
 using System.Text;
 using FluentAssertions;
-using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;
 
@@ -13,8 +12,6 @@ public static class MachineSaltProviderIntegrationTestsCollectionDefinition {
 
 [Collection(MachineSaltProviderIntegrationTestsCollectionDefinition.Name)]
 public sealed class MachineSaltProviderIntegrationTests {
-    private const string SaltFileName = "telemetry.salt";
-
     private const string EnvKeelMatrixNoTelemetry = "KEELMATRIX_NO_TELEMETRY";
     private const string EnvDotNetCliTelemetryOptOut = "DOTNET_CLI_TELEMETRY_OPTOUT";
     private const string EnvDoNotTrack = "DO_NOT_TRACK";
