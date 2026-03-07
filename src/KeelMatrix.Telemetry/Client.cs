@@ -4,9 +4,31 @@ using KeelMatrix.Telemetry.Infrastructure;
 using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry {
+    /// <summary>
+    /// Provides a minimal, best-effort entry point for emitting anonymous usage telemetry.
+    /// </summary>
+    /// <remarks>
+    /// The client is designed to be safe for library consumers to call from normal execution paths.
+    /// Calls are non-blocking, tolerate repeated invocation, and degrade to a no-op when telemetry is disabled
+    /// or initialization cannot be completed safely.
+    /// </remarks>
     public sealed class Client {
         private readonly ITelemetryClient client;
 
+        /// <summary>
+        /// Initializes a telemetry client for the specified tool.
+        /// </summary>
+        /// <param name="toolName">
+        /// A stable identifier for the consuming tool or package. The value is used to derive per-user telemetry storage
+        /// and to label emitted events.
+        /// </param>
+        /// <param name="toolType">
+        /// A type from the consuming assembly. The containing assembly version is used as the tool version reported in telemetry.
+        /// </param>
+        /// <remarks>
+        /// Construction is best-effort and does not throw. If telemetry is disabled or the runtime cannot initialize the
+        /// underlying pipeline, this instance falls back to a no-op implementation.
+        /// </remarks>
         public Client(string toolName, Type toolType) {
             client = CreateClient(toolName, toolType);
         }
@@ -46,30 +68,28 @@ namespace KeelMatrix.Telemetry {
                 return new TelemetryClient(worker);
             }
             catch {
-                // Absolute last line of defense
+                // Construction must never surface telemetry failures to the caller.
                 return new NullTelemetryClient();
             }
         }
 
         /// <summary>
-        /// Records a one-time activation telemetry event for the current project.
-        /// The event is emitted only once and is ignored on subsequent calls.
+        /// Requests a one-time activation telemetry event for the current project.
         /// </summary>
         /// <remarks>
-        /// This method is safe to call multiple times and never throws.
-        /// Telemetry emission is best-effort and may be disabled via environment configuration.
+        /// The request is best-effort, non-blocking, and never throws. Repeated calls are safe; after activation has been
+        /// recorded for the current project, later calls are ignored.
         /// </remarks>
         public void TrackActivation() {
             client.TrackActivation();
         }
 
         /// <summary>
-        /// Records a weekly heartbeat telemetry event indicating continued usage.
-        /// At most one heartbeat is emitted per project per ISO week.
+        /// Requests a heartbeat telemetry event that indicates continued usage for the current project.
         /// </summary>
         /// <remarks>
-        /// This method is safe to call multiple times and never throws.
-        /// Telemetry emission is best-effort and may be disabled via environment configuration.
+        /// The request is best-effort, non-blocking, and never throws. At most one heartbeat is emitted per project per
+        /// ISO week, and a newly recorded activation suppresses the heartbeat for that same week.
         /// </remarks>
         public void TrackHeartbeat() {
             client.TrackHeartbeat();

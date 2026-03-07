@@ -35,6 +35,21 @@ public sealed class TelemetryStateMarkerTests {
     }
 
     [Fact]
+    public void ShouldSendActivation_RemainsFalse_AfterCommittedMarkerIsObservedOnce() {
+        using var runtime = TestRuntimeScope.Create(typeof(TelemetryStateMarkerTests));
+
+        var state = new TelemetryState(runtime.RootDir, runtime.ProjectHash);
+        var expectedPath = Path.Combine(runtime.MarkerDir, $"activation.{runtime.ProjectHash}.json");
+
+        state.CommitActivation();
+        state.ShouldSendActivation().Should().BeFalse();
+
+        File.Delete(expectedPath);
+
+        state.ShouldSendActivation().Should().BeFalse();
+    }
+
+    [Fact]
     public void ShouldSendHeartbeat_True_WhenNoMarkerForWeek() {
         using var runtime = TestRuntimeScope.Create(typeof(TelemetryStateMarkerTests));
 
@@ -57,6 +72,22 @@ public sealed class TelemetryStateMarkerTests {
 
         var expectedPath = Path.Combine(runtime.MarkerDir, $"heartbeat.{runtime.ProjectHash}.{week}.json");
         File.Exists(expectedPath).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldSendHeartbeat_RemainsFalse_ForAWeek_AfterCommittedMarkerIsObservedOnce() {
+        using var runtime = TestRuntimeScope.Create(typeof(TelemetryStateMarkerTests));
+
+        var state = new TelemetryState(runtime.RootDir, runtime.ProjectHash);
+        var week = runtime.CurrentWeek;
+        var expectedPath = Path.Combine(runtime.MarkerDir, $"heartbeat.{runtime.ProjectHash}.{week}.json");
+
+        state.CommitHeartbeat(week);
+        state.ShouldSendHeartbeat(week).Should().BeFalse();
+
+        File.Delete(expectedPath);
+
+        state.ShouldSendHeartbeat(week).Should().BeFalse();
     }
 
     [Fact]

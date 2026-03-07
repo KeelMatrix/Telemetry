@@ -15,13 +15,13 @@ namespace KeelMatrix.Telemetry {
         internal static Uri Url =>
             Volatile.Read(ref urlOverrideForTests) ?? ProductionUrl;
 
-        // For IntegrationTests: set to http://127.0.0.1:<port>/ (or similar); set to null to restore production.
+        // Integration tests can point telemetry at a local loopback endpoint instead of production.
         internal static void SetUrlOverrideForTests(Uri? uri) {
             if (uri is not null) {
                 if (!uri.IsAbsoluteUri)
                     throw new ArgumentException("Override URL must be absolute.", nameof(uri));
 
-                // Allow http for localhost test servers.
+                // Allow plain HTTP for local test servers.
                 if (uri.Scheme is not ("http" or "https"))
                     throw new ArgumentException("Override URL must use http or https.", nameof(uri));
             }
@@ -159,8 +159,8 @@ namespace KeelMatrix.Telemetry {
         }
 
         /// <summary>
-        /// Determines whether telemetry is globally disabled via environment variables.
-        /// Compatibility: honors common ecosystem opt-out variables in addition to the library-specific one.
+        /// Determines whether telemetry is disabled for the current process, either explicitly
+        /// or through environment-based opt-out signals.
         /// </summary>
         internal static bool IsTelemetryDisabled() {
             // Process-local hard disable
@@ -189,7 +189,7 @@ namespace KeelMatrix.Telemetry {
 
                 value = value.Trim();
 
-                // Common truthy values used by tooling and CI environments
+                // Accept common truthy spellings used by tooling and CI environments.
                 return value == "1"
                     || value.Equals("true", StringComparison.OrdinalIgnoreCase)
                     || value.Equals("yes", StringComparison.OrdinalIgnoreCase)

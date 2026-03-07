@@ -7,13 +7,13 @@ namespace KeelMatrix.Telemetry {
     /// </summary>
     internal interface ITelemetryClient {
         /// <summary>
-        /// Attempts to emit an activation event if telemetry is enabled
+        /// Requests an activation event if telemetry is enabled
         /// and activation has not yet been recorded.
         /// </summary>
         void TrackActivation();
 
         /// <summary>
-        /// Attempts to emit a heartbeat event if telemetry is enabled
+        /// Requests a heartbeat event if telemetry is enabled
         /// and a heartbeat has not yet been recorded for the current week.
         /// </summary>
         void TrackHeartbeat();

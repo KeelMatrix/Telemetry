@@ -2,8 +2,8 @@
 
 namespace KeelMatrix.Telemetry {
     /// <summary>
-    /// A no-op implementation of <see cref="ITelemetryClient"/> used when
-    /// telemetry is disabled or unavailable.
+    /// A no-op implementation of <see cref="ITelemetryClient"/> used when telemetry is disabled
+    /// or the telemetry pipeline cannot be initialized safely.
     /// </summary>
     internal sealed class NullTelemetryClient : ITelemetryClient {
         /// <inheritdoc />

@@ -8,6 +8,8 @@ namespace KeelMatrix.Telemetry {
     internal sealed class TelemetryState {
         private readonly string markerDir;
         private readonly string projectHash;
+        private bool activationKnownCommitted;
+        private readonly HashSet<string> heartbeatWeeksKnownCommitted = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Initializes a new instance for the given project hash.
@@ -23,39 +25,68 @@ namespace KeelMatrix.Telemetry {
         /// Returns true if activation has not yet been recorded.
         /// </summary>
         internal bool ShouldSendActivation() {
-            return !File.Exists(GetActivationPath(markerDir, projectHash));
+            if (activationKnownCommitted)
+                return false;
+
+            var path = GetActivationPath(markerDir, projectHash);
+            if (!SafeFileExists(path))
+                return true;
+
+            activationKnownCommitted = true;
+            return false;
         }
 
         /// <summary>
         /// Returns true if no heartbeat exists for the given ISO week.
         /// </summary>
         internal bool ShouldSendHeartbeat(string isoWeek) {
-            return !File.Exists(GetHeartbeatPath(markerDir, projectHash, isoWeek));
+            if (heartbeatWeeksKnownCommitted.Contains(isoWeek))
+                return false;
+
+            var path = GetHeartbeatPath(markerDir, projectHash, isoWeek);
+            if (!SafeFileExists(path))
+                return true;
+
+            heartbeatWeeksKnownCommitted.Add(isoWeek);
+            return false;
         }
 
         /// <summary>
         /// Atomically records activation using CreateNew semantics.
         /// </summary>
         internal void CommitActivation() {
-            TryCreateMarker(GetActivationPath(markerDir, projectHash));
+            if (TryCreateMarker(GetActivationPath(markerDir, projectHash)))
+                activationKnownCommitted = true;
         }
 
         /// <summary>
         /// Atomically records heartbeat for the given ISO week.
         /// </summary>
         internal void CommitHeartbeat(string isoWeek) {
-            TryCreateMarker(GetHeartbeatPath(markerDir, projectHash, isoWeek));
+            if (TryCreateMarker(GetHeartbeatPath(markerDir, projectHash, isoWeek)))
+                heartbeatWeeksKnownCommitted.Add(isoWeek);
         }
 
         /// <summary>
-        /// Attempts to create a marker file atomically.
+        /// Attempts to create a marker file atomically and reports whether the committed marker is known to exist.
         /// </summary>
-        private static void TryCreateMarker(string path) {
+        private static bool TryCreateMarker(string path) {
             try {
                 using var _ = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                return true;
             }
             catch {
-                // already exists or filesystem failure → ignore
+                // Already exists or creation failed. Only cache positive state if the marker is known to exist.
+                return SafeFileExists(path);
+            }
+        }
+
+        private static bool SafeFileExists(string path) {
+            try {
+                return File.Exists(path);
+            }
+            catch {
+                return false;
             }
         }
 
