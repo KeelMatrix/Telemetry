@@ -2,11 +2,10 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using FluentAssertions;
 using KeelMatrix.Telemetry.Infrastructure;
+using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;
 
@@ -45,7 +44,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         worker.RequestActivation();
         await Task.Delay(250);
 
-        harness.Server.Received.Count.Should().Be(0);
+        harness.Sender.Received.Count.Should().Be(0);
         File.Exists(backlogPath).Should().BeTrue();
 
         if (Directory.Exists(harness.ProcessingDir))
@@ -59,7 +58,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         worker.RequestActivation();
 
-        await WaitUntilAsync(() => harness.Server.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => Directory.Exists(harness.MarkersDir), TimeSpan.FromSeconds(2));
 
         Directory.EnumerateFiles(harness.MarkersDir, "activation.*.json").Should().NotBeEmpty();
@@ -74,17 +73,17 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         worker.RequestActivation();
         worker.RequestHeartbeat();
 
-        await WaitUntilAsync(() => harness.Server.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
         await Task.Delay(250);
 
-        var events = harness.Server.Received.Select(r => r.Event).ToList();
+        var events = harness.Sender.Received.Select(r => r.Event).ToList();
         events.Should().Contain("activation");
         events.Should().NotContain("heartbeat", "activation should suppress heartbeat for the same week");
 
         worker.RequestHeartbeat();
         await Task.Delay(250);
 
-        harness.Server.Received.Select(r => r.Event).Should().NotContain("heartbeat");
+        harness.Sender.Received.Select(r => r.Event).Should().NotContain("heartbeat");
     }
 
     [Fact]
@@ -94,7 +93,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         worker.RequestHeartbeat();
 
-        await WaitUntilAsync(() => harness.Server.Received.Any(r => r.Event == "heartbeat"), TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "heartbeat"), TimeSpan.FromSeconds(5));
 
         Directory.EnumerateFiles(harness.MarkersDir, $"heartbeat.*.{harness.CurrentWeek}.json").Should().NotBeEmpty();
     }
@@ -109,9 +108,12 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         using var worker = harness.CreateWorker();
 
-        await WaitUntilAsync(() => harness.Server.Received.Count >= 6, TimeSpan.FromSeconds(10));
+        await WaitUntilAsync(() => harness.Sender.Received.Count >= 6, TimeSpan.FromSeconds(10));
         await WaitUntilAsync(
             () => !Directory.Exists(harness.PendingDir) || !Directory.EnumerateFiles(harness.PendingDir, "*.json").Any(),
+            TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(
+            () => !Directory.Exists(harness.ProcessingDir) || !Directory.EnumerateFiles(harness.ProcessingDir, "*.json").Any(),
             TimeSpan.FromSeconds(5));
 
         if (Directory.Exists(harness.ProcessingDir))
@@ -143,8 +145,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             env.Clear();
             ResetProcessDisabledForTests();
 
-            Server = new LocalTelemetryServer();
-            TelemetryConfig.SetUrlOverrideForTests(Server.BaseUri);
+            Sender = new RecordingTelemetrySender();
 
             var toolNameUpper = "INTEGRATIONTEST_WORKER_" + Guid.NewGuid().ToString("N");
             RuntimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryDeliveryWorkerIntegrationTests));
@@ -155,7 +156,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             TryDeleteDirectory(rootDir);
         }
 
-        public LocalTelemetryServer Server { get; }
+        public RecordingTelemetrySender Sender { get; }
         public TelemetryRuntimeContext RuntimeContext { get; }
         public RuntimeInfo RuntimeInfo { get; }
         public string PendingDir => Path.Combine(rootDir, "telemetry.queue", "pending");
@@ -171,13 +172,11 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         }
 
         public TelemetryDeliveryWorker CreateWorker() {
-            return new TelemetryDeliveryWorker(RuntimeContext, RuntimeInfo);
+            return new TelemetryDeliveryWorker(RuntimeContext, RuntimeInfo, new ProjectIdentityProvider(RuntimeContext, RuntimeInfo), Sender);
         }
 
         public void Dispose() {
-            try { TelemetryConfig.SetUrlOverrideForTests(null); } catch { /* swallow */ }
-
-            Server.Dispose();
+            Sender.Dispose();
             env.Dispose();
             TryDeleteDirectory(rootDir);
         }
@@ -223,63 +222,14 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         }
     }
 
-    private sealed class LocalTelemetryServer : IDisposable {
-        private readonly HttpListener listener;
-        private readonly CancellationTokenSource cts = new();
-        private readonly Task loop;
-
-        public LocalTelemetryServer() {
-            int port = GetFreeTcpPort();
-            var prefix = $"http://127.0.0.1:{port}/";
-
-            BaseUri = new Uri(prefix, UriKind.Absolute);
-
-            listener = new HttpListener();
-            listener.Prefixes.Add(prefix);
-            listener.Start();
-
-            loop = Task.Run(AcceptLoopAsync);
-        }
-
-        public Uri BaseUri { get; }
+    private sealed class RecordingTelemetrySender : ITelemetrySender {
         public ConcurrentQueue<ReceivedRequest> Received { get; } = new();
 
-        private async Task AcceptLoopAsync() {
-            while (!cts.IsCancellationRequested) {
-                HttpListenerContext? context;
-                try {
-                    context = await listener.GetContextAsync().ConfigureAwait(false);
-                }
-                catch {
-                    if (cts.IsCancellationRequested)
-                        return;
-
-                    continue;
-                }
-
-                try {
-                    string body;
-                    using (var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: false)) {
-                        body = await reader.ReadToEndAsync().ConfigureAwait(false);
-                    }
-
-                    var telemetryEvent = TryExtractEventField(body) ?? string.Empty;
-                    Received.Enqueue(new ReceivedRequest(telemetryEvent, body));
-
-                    context.Response.StatusCode = (int)HttpStatusCode.OK;
-                    context.Response.ContentType = "text/plain";
-
-                    var bytes = Encoding.UTF8.GetBytes("ok");
-                    await context.Response.OutputStream.WriteAsync(bytes);
-                }
-                catch {
-                    // swallow
-                }
-                finally {
-                    try { context?.Response.OutputStream.Close(); } catch { /* swallow */ }
-                    try { context?.Response.Close(); } catch { /* swallow */ }
-                }
-            }
+        public Task<bool> TrySendAsync(string json, CancellationToken token) {
+            token.ThrowIfCancellationRequested();
+            var telemetryEvent = TryExtractEventField(json) ?? string.Empty;
+            Received.Enqueue(new ReceivedRequest(telemetryEvent, json));
+            return Task.FromResult(true);
         }
 
         private static string? TryExtractEventField(string json) {
@@ -303,20 +253,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             return json.Substring(firstQuote + 1, secondQuote - firstQuote - 1);
         }
 
-        private static int GetFreeTcpPort() {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            return port;
-        }
-
-        public void Dispose() {
-            try { cts.Cancel(); cts.Dispose(); } catch { /* swallow */ }
-            try { listener.Stop(); } catch { /* swallow */ }
-            try { listener.Close(); } catch { /* swallow */ }
-            try { loop.Wait(TimeSpan.FromSeconds(1)); } catch { /* swallow */ }
-        }
+        public void Dispose() { }
 
         public readonly record struct ReceivedRequest(string Event, string Body);
     }
