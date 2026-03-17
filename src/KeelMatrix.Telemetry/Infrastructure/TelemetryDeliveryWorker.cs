@@ -13,7 +13,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private readonly RuntimeInfo runtimeInfo;
         private readonly IProjectIdentityProvider projectIdentityProvider;
         private readonly ITelemetryQueue queue;
-        private readonly TelemetryHttpSender httpSender;
+        private readonly ITelemetrySender httpSender;
 
         private readonly SemaphoreSlim signal = new(0, int.MaxValue);
         private readonly CancellationTokenSource cts = new();
@@ -47,12 +47,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         internal TelemetryDeliveryWorker(
             TelemetryRuntimeContext runtimeContext,
             RuntimeInfo runtimeInfo,
-            IProjectIdentityProvider projectIdentityProvider) {
+            IProjectIdentityProvider projectIdentityProvider)
+            : this(runtimeContext, runtimeInfo, projectIdentityProvider, new TelemetryHttpSender(runtimeContext.Url)) {
+        }
+
+        internal TelemetryDeliveryWorker(
+            TelemetryRuntimeContext runtimeContext,
+            RuntimeInfo runtimeInfo,
+            IProjectIdentityProvider projectIdentityProvider,
+            ITelemetrySender telemetrySender) {
             this.runtimeContext = runtimeContext;
             this.runtimeInfo = runtimeInfo;
             this.projectIdentityProvider = projectIdentityProvider ?? throw new ArgumentNullException(nameof(projectIdentityProvider));
+            httpSender = telemetrySender ?? throw new ArgumentNullException(nameof(telemetrySender));
             queue = DurableTelemetryQueue.CreateSafe(runtimeContext);
-            httpSender = new TelemetryHttpSender(runtimeContext.Url);
 
             _workerTask = Task.Run(RunAsync);
 

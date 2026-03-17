@@ -45,7 +45,7 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
         // At minimum, CurrentDirectory should be among starting points.
         var starts = GitDiscovery.GetStartingPoints().Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
         starts.Should().NotBeEmpty();
-        starts.Should().Contain(s => Path.GetFullPath(s) == Path.GetFullPath(workDir));
+        starts.Should().Contain(s => AreEquivalentPaths(s, workDir));
 
         var foundAny = false;
         foreach (var start in starts) {
@@ -53,7 +53,7 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
                 continue;
 
             GitDiscovery.TryFindGitDirectory(start, out var gitDir).Should().BeTrue();
-            gitDir.Should().Be(Path.GetFullPath(dotGitDir));
+            AreEquivalentPaths(gitDir, dotGitDir).Should().BeTrue();
             foundAny = true;
         }
 
@@ -141,8 +141,8 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
         if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(rootDir))
             return false;
 
-        candidate = Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        rootDir = Path.GetFullPath(rootDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        candidate = NormalizePathForComparison(candidate);
+        rootDir = NormalizePathForComparison(rootDir);
 
         if (OperatingSystem.IsWindows()) {
             if (candidate.Equals(rootDir, StringComparison.OrdinalIgnoreCase))
@@ -153,6 +153,27 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
         if (candidate.Equals(rootDir, StringComparison.Ordinal))
             return true;
         return candidate.StartsWith(rootDir + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+    }
+
+    private static bool AreEquivalentPaths(string left, string right) {
+        var normalizedLeft = NormalizePathForComparison(left);
+        var normalizedRight = NormalizePathForComparison(right);
+
+        if (OperatingSystem.IsWindows())
+            return normalizedLeft.Equals(normalizedRight, StringComparison.OrdinalIgnoreCase);
+
+        return normalizedLeft.Equals(normalizedRight, StringComparison.Ordinal);
+    }
+
+    private static string NormalizePathForComparison(string path) {
+        var normalized = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (OperatingSystem.IsMacOS() &&
+            normalized.StartsWith("/private/", StringComparison.Ordinal)) {
+            normalized = normalized.Substring("/private".Length);
+        }
+
+        return normalized;
     }
 
     private static void WriteBytes(string path, int count) {

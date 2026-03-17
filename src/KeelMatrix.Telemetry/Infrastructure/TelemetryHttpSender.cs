@@ -3,10 +3,14 @@
 using System.Text;
 
 namespace KeelMatrix.Telemetry.Infrastructure {
+    internal interface ITelemetrySender : IDisposable {
+        Task<bool> TrySendAsync(string json, CancellationToken token);
+    }
+
     /// <summary>
     /// Handles low-level transmission of telemetry payloads.
     /// </summary>
-    internal sealed class TelemetryHttpSender : IDisposable {
+    internal sealed class TelemetryHttpSender : ITelemetrySender {
 #if NET8_0_OR_GREATER
         private readonly HttpClient httpClient = CreateHttpClient();
 #else
@@ -22,7 +26,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             this.url = url;
         }
 
-        internal async Task<bool> TrySendAsync(string json, CancellationToken token) {
+        public async Task<bool> TrySendAsync(string json, CancellationToken token) {
             try {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
