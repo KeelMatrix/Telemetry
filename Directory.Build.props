@@ -27,6 +27,12 @@
     <Deterministic>true</Deterministic>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsPackable)'=='true'">
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)'=='true' or '$(CI)'=='true'">true</ContinuousIntegrationBuild>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+  </PropertyGroup>
   
   <!-- Include Public API baseline files if they exist next to a project. -->
   <ItemGroup>

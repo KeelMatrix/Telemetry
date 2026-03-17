@@ -7,18 +7,15 @@
 		<LangVersion>latest</LangVersion>
 		<Authors>KeelMatrix</Authors>
 		<EnablePublicApiAnalyzers>true</EnablePublicApiAnalyzers>
-		<GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 		<PackageId>KeelMatrix.Telemetry</PackageId>
-		<Description>Shared, privacy-first telemetry infrastructure for KeelMatrix products, providing activation and usage signals with minimal, non-intrusive data collection.</Description>	<PackageTags>telemetry;analytics;observability;dotnet;library;nuget;activation;usage-tracking;privacy;non-blocking</PackageTags>
+		<Description>Shared, privacy-first telemetry infrastructure for KeelMatrix products, providing activation and usage signals with minimal, non-intrusive data collection.</Description>
+		<PackageTags>telemetry;analytics;observability;dotnet;library;nuget;activation;usage-tracking;privacy;non-blocking</PackageTags>
 		<RepositoryUrl>https://github.com/KeelMatrix/Telemetry</RepositoryUrl>
 		<PackageProjectUrl>https://github.com/KeelMatrix/Telemetry#readme</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageIcon>icon.png</PackageIcon>
 		<RepositoryType>git</RepositoryType>
-		<PublishRepositoryUrl>true</PublishRepositoryUrl>
-		<EmbedUntrackedSources>true</EmbedUntrackedSources>
-		<ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
 		<IncludeSymbols>true</IncludeSymbols>
 		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>

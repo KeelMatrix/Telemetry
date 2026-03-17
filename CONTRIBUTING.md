@@ -12,9 +12,11 @@ Thank you for considering contributing to this project! We welcome contributions
 
 1. Fork the repository and create your feature branch from `main`: `git checkout -b my-feature`.
 2. If you've added code that should be tested, add tests.
-3. Ensure the test suite passes by running `dotnet test`.
-4. Format your code with `dotnet format` and ensure there are no linting warnings.
-5. Update any relevant documentation (README, examples, etc.).
+3. Ensure the test suite passes by running `dotnet test KeelMatrix.Telemetry.slnx --configuration Release`.
+4. Ensure the solution builds in release mode: `dotnet build KeelMatrix.Telemetry.slnx --configuration Release`.
+5. If you changed packable code or package metadata, verify the NuGet package builds locally:
+   `dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols --p:SymbolPackageFormat=snupkg --output ./artifacts/packages`
+6. Update any relevant documentation (README, examples, etc.).
 
 ## Submitting a Pull Request
 
@@ -35,14 +37,16 @@ This repository uses **Roslyn Public API Analyzers** to lock down the surface ar
 When you add or change a public member in a packable project:
 
 1. Make your code changes.
-2. Run the bump script to update the `PublicAPI.Unshipped.txt` files:
-
-   - Windows/PowerShell: `./build/bump-api.ps1`
-   - macOS/Linux: `./build/bump-api.sh`
-
-3. Review the diff and commit. When we cut a release, items from *Unshipped* will be moved to *Shipped*.
+2. Update the `PublicAPI.Unshipped.txt` file in that project directory with the new API signatures reported by the analyzer.
+3. Review the diff and commit it with the code change.
+4. When cutting a release, move shipped entries from `PublicAPI.Unshipped.txt` to `PublicAPI.Shipped.txt`.
 
 > Tips
 > - We keep a single `PublicAPI.Shipped.txt`/`PublicAPI.Unshipped.txt` pair per project across TFMs.
 > - If a member is TFM-specific, append a trailing comment to its line: `// TFM: net8.0` or `// TFM: netstandard2.0`.
 
+## Release and versioning
+
+- Package versioning is centralized in `Directory.Build.props`.
+- CI validates pushes and pull requests on Windows, Linux, and macOS, then packs the NuGet package.
+- Publishing happens only when a Git tag matching `v*` is pushed. That workflow pushes the package to NuGet.org and creates a GitHub release.
