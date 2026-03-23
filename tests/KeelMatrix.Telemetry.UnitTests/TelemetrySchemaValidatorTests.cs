@@ -185,8 +185,7 @@ public sealed class TelemetrySchemaValidatorTests {
             timestamp: timestamp ?? ValidTimestampUtc);
     }
 
-    public static TheoryData<string, string> GetTooLongRuntimeOrOsCases()
-    {
+    public static TheoryData<string, string> GetTooLongRuntimeOrOsCases() {
         const string okRuntime = "dotnet";
         const string okOs = "linux";
 
@@ -197,8 +196,7 @@ public sealed class TelemetrySchemaValidatorTests {
         return data;
     }
 
-    public static TheoryData<string> GetBadTimestampCases()
-    {
+    public static TheoryData<string> GetBadTimestampCases() {
         var data = new TheoryData<string>();
 
         // Wrong format (space instead of 'T')

@@ -41,7 +41,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (string.IsNullOrWhiteSpace(startingPoint))
                 return false;
 
-            var slnCandidates = new List<Candidate>();
+            var fullSolutionCandidates = new List<Candidate>();
+            var solutionFilterCandidates = new List<Candidate>();
             var projCandidates = new List<Candidate>();
 
             string? current = SafeGetFullPath(startingPoint);
@@ -54,12 +55,30 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 if (string.IsNullOrEmpty(markerRoot) && LooksLikeRepoRootMarker(current!))
                     markerRoot = current!;
 
-                TryCollectCandidatesInDirectory(current!, step, slnCandidates, projCandidates);
+                TryCollectCandidatesInDirectory(current!, step, fullSolutionCandidates, solutionFilterCandidates, projCandidates);
                 current = SafeGetParentDirectory(current!);
             }
 
-            if (slnCandidates.Count > 0) {
-                var chosen = slnCandidates
+            if (fullSolutionCandidates.Count > 0) {
+                var chosen = fullSolutionCandidates
+                    .OrderBy(c => c.Step)
+                    .ThenBy(c => c.FullPath, StringComparer.Ordinal)
+                    .First();
+
+                primaryPath = chosen.FullPath;
+                primaryRole = "sln";
+
+                var primaryDir = SafeGetFullPath(Path.GetDirectoryName(primaryPath) ?? string.Empty);
+
+                identityRoot = !string.IsNullOrEmpty(markerRoot)
+                    ? markerRoot
+                    : primaryDir;
+
+                return !string.IsNullOrEmpty(identityRoot) && !string.IsNullOrEmpty(primaryPath);
+            }
+
+            if (solutionFilterCandidates.Count > 0) {
+                var chosen = solutionFilterCandidates
                     .OrderBy(c => c.Step)
                     .ThenBy(c => c.FullPath, StringComparer.Ordinal)
                     .First();
@@ -148,13 +167,24 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         private static void TryCollectCandidatesInDirectory(
             string dir,
             int step,
-            List<Candidate> slnCandidates,
+            List<Candidate> fullSolutionCandidates,
+            List<Candidate> solutionFilterCandidates,
             List<Candidate> projCandidates) {
             try {
 #pragma warning disable S3267 // Loops should be simplified with "LINQ" expressions
                 foreach (var sln in SafeEnumerateFiles(dir, "*.sln")) {
                     if (!string.IsNullOrEmpty(sln))
-                        slnCandidates.Add(new Candidate(step, SafeGetFullPath(sln)));
+                        fullSolutionCandidates.Add(new Candidate(step, SafeGetFullPath(sln)));
+                }
+
+                foreach (var slnx in SafeEnumerateFiles(dir, "*.slnx")) {
+                    if (!string.IsNullOrEmpty(slnx))
+                        fullSolutionCandidates.Add(new Candidate(step, SafeGetFullPath(slnx)));
+                }
+
+                foreach (var slnf in SafeEnumerateFiles(dir, "*.slnf")) {
+                    if (!string.IsNullOrEmpty(slnf))
+                        solutionFilterCandidates.Add(new Candidate(step, SafeGetFullPath(slnf)));
                 }
 #pragma warning restore S3267
 
@@ -418,6 +448,14 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
             if (string.Equals(ext, ".sln", StringComparison.Ordinal)) {
                 return CanonicalizeSln(rawBytes);
+            }
+
+            if (string.Equals(ext, ".slnx", StringComparison.Ordinal)) {
+                return CanonicalizeStructuredXml(rawBytes, "slnx.v1");
+            }
+
+            if (string.Equals(ext, ".slnf", StringComparison.Ordinal)) {
+                return CanonicalizeStructuredJson(rawBytes, "slnf.v1");
             }
 
             if (string.Equals(ext, ".csproj", StringComparison.Ordinal) ||
@@ -713,6 +751,71 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             return value;
         }
 
+        private static byte[] CanonicalizeStructuredXml(byte[] rawBytes, string header) {
+            var text = GeneralNormalizeToString(rawBytes);
+
+            try {
+                var settings = new XmlReaderSettings {
+                    DtdProcessing = DtdProcessing.Prohibit,
+                    XmlResolver = null
+                };
+
+                XDocument doc;
+                using (var sr = new StringReader(text))
+                using (var xr = XmlReader.Create(sr, settings)) {
+                    doc = XDocument.Load(xr, LoadOptions.None);
+                }
+
+                if (doc.Root == null)
+                    return Encoding.UTF8.GetBytes(text);
+
+                var sb = new StringBuilder();
+                sb.Append(header).Append('\n');
+                AppendCanonicalXmlNode(doc.Root, sb);
+                EnsureSingleTrailingNewline(sb);
+                return Encoding.UTF8.GetBytes(sb.ToString());
+            }
+            catch {
+                return Encoding.UTF8.GetBytes(text);
+            }
+        }
+
+        private static void AppendCanonicalXmlNode(XElement element, StringBuilder sb) {
+            sb.Append('<').Append(element.Name.LocalName);
+
+            foreach (var attr in element.Attributes().OrderBy(a => a.Name.LocalName, StringComparer.Ordinal)) {
+                sb.Append(' ')
+                    .Append(attr.Name.LocalName)
+                    .Append("=\"")
+                    .Append(NormalizeWhitespace(attr.Value))
+                    .Append('"');
+            }
+
+            sb.Append('>');
+
+            foreach (var node in element.Nodes()) {
+                switch (node) {
+                    case XElement child:
+                        AppendCanonicalXmlNode(child, sb);
+                        break;
+                    case XCData cdataNode: {
+                            var text = NormalizeWhitespace(cdataNode.Value);
+                            if (text.Length > 0)
+                                sb.Append(text);
+                            break;
+                        }
+                    case XText textNode: {
+                            var text = NormalizeWhitespace(textNode.Value);
+                            if (text.Length > 0)
+                                sb.Append(text);
+                            break;
+                        }
+                }
+            }
+
+            sb.Append("</").Append(element.Name.LocalName).Append('>');
+        }
+
         private static byte[] CanonicalizeGlobalJson(byte[] rawBytes) {
             var text = GeneralNormalizeToString(rawBytes);
 
@@ -765,6 +868,56 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
             catch {
                 return Encoding.UTF8.GetBytes(text);
+            }
+        }
+
+        private static byte[] CanonicalizeStructuredJson(byte[] rawBytes, string header) {
+            var text = GeneralNormalizeToString(rawBytes);
+
+            try {
+                var options = new JsonDocumentOptions {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                };
+
+                using var doc = JsonDocument.Parse(text, options);
+                using var stream = new MemoryStream();
+                using (var writer = new Utf8JsonWriter(stream)) {
+                    WriteCanonicalJsonElement(doc.RootElement, writer);
+                }
+
+                var sb = new StringBuilder();
+                sb.Append(header).Append('\n');
+                sb.Append(Encoding.UTF8.GetString(stream.ToArray()));
+                EnsureSingleTrailingNewline(sb);
+                return Encoding.UTF8.GetBytes(sb.ToString());
+            }
+            catch {
+                return Encoding.UTF8.GetBytes(text);
+            }
+        }
+
+        private static void WriteCanonicalJsonElement(JsonElement element, Utf8JsonWriter writer) {
+            switch (element.ValueKind) {
+                case JsonValueKind.Object:
+                    writer.WriteStartObject();
+                    foreach (var property in element.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal)) {
+                        writer.WritePropertyName(property.Name);
+                        WriteCanonicalJsonElement(property.Value, writer);
+                    }
+                    writer.WriteEndObject();
+                    break;
+
+                case JsonValueKind.Array:
+                    writer.WriteStartArray();
+                    foreach (var item in element.EnumerateArray())
+                        WriteCanonicalJsonElement(item, writer);
+                    writer.WriteEndArray();
+                    break;
+
+                default:
+                    element.WriteTo(writer);
+                    break;
             }
         }
 
