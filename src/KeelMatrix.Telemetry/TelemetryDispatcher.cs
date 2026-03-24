@@ -12,20 +12,22 @@ namespace KeelMatrix.Telemetry {
     internal sealed class TelemetryDispatcher {
         private readonly TelemetryState state;
         private readonly string projectHash;
+        private readonly string installationHash;
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly RuntimeInfo runtimeInfo;
 
         internal TelemetryDispatcher(
             TelemetryRuntimeContext runtimeContext,
             RuntimeInfo runtimeInfo,
-            string projectHash) {
+            ProjectIdentity.ResolvedTelemetryIdentity identities) {
             this.runtimeContext = runtimeContext;
             this.runtimeInfo = runtimeInfo;
-            this.projectHash = string.IsNullOrWhiteSpace(projectHash)
-                ? new string('0', 64)
-                : projectHash;
+            if (!identities.HasProjectIdentity)
+                throw new ArgumentException("A stable project identity is required to create telemetry events.", nameof(identities));
 
-            state = new TelemetryState(runtimeContext.GetRootDirectory(), this.projectHash);
+            projectHash = identities.ProjectHash!;
+            installationHash = identities.InstallationHash;
+            state = new TelemetryState(runtimeContext.GetRootDirectory(), projectHash);
         }
 
         /// <summary>
@@ -45,6 +47,7 @@ namespace KeelMatrix.Telemetry {
                 TelemetryConfig.TelemetryVersion,
                 TelemetryConfig.SchemaVersion,
                 projectHash,
+                installationHash,
                 runtimeInfo.Runtime,
                 runtimeInfo.Os,
                 runtimeInfo.IsCi,
@@ -69,6 +72,7 @@ namespace KeelMatrix.Telemetry {
                 TelemetryConfig.TelemetryVersion,
                 TelemetryConfig.SchemaVersion,
                 projectHash,
+                installationHash,
                 week);
         }
 

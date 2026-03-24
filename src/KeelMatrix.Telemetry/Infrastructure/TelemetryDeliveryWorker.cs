@@ -105,7 +105,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
         private async Task RunAsync() {
             var token = cts.Token;
-            bool projectHashComputed = false;
+            bool identitiesResolved = false;
 
             while (!token.IsCancellationRequested) {
                 try {
@@ -124,15 +124,15 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     }
                 }
 
-                // Compute project identity/hash once on the worker thread (best-effort).
-                if (!projectHashComputed && !TelemetryConfig.IsTelemetryDisabled()) {
+                // Resolve telemetry identities once on the worker thread (best-effort).
+                if (!identitiesResolved && !TelemetryConfig.IsTelemetryDisabled()) {
                     try {
-                        _ = projectIdentityProvider.EnsureComputedOnWorkerThread();
-                        projectHashComputed = true;
+                        _ = projectIdentityProvider.EnsureResolvedOnWorkerThread();
+                        identitiesResolved = true;
                     }
                     catch {
                         // Broken identity state must hard-disable telemetry so we never emit
-                        // under a placeholder or partial project identity.
+                        // under a placeholder or partial telemetry identity.
                         TelemetryConfig.DisableTelemetryForCurrentProcess();
                     }
                 }
@@ -211,10 +211,10 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             if (!doActivation && !doHeartbeat)
                 return;
 
-            // Compute/lock project hash on the worker thread (cached for process lifetime).
-            string projectHash;
+            // Resolve telemetry identities on the worker thread (cached for process lifetime).
+            ResolvedTelemetryIdentity identities;
             try {
-                projectHash = projectIdentityProvider.EnsureComputedOnWorkerThread();
+                identities = projectIdentityProvider.EnsureResolvedOnWorkerThread();
             }
             catch {
                 // Broken identity state must prevent all emission for this process.
@@ -222,8 +222,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 return;
             }
 
+            if (string.IsNullOrWhiteSpace(identities.InstallationHash)) {
+                TelemetryConfig.DisableTelemetryForCurrentProcess();
+                return;
+            }
+
+            if (!identities.HasProjectIdentity)
+                return;
+
             // Create dispatcher/state on worker thread (marker I/O happens inside TelemetryState).
-            dispatcher ??= new TelemetryDispatcher(runtimeContext, runtimeInfo, projectHash);
+            dispatcher ??= new TelemetryDispatcher(runtimeContext, runtimeInfo, identities);
 
             // Needed for "activation suppresses heartbeat until next week".
             var currentWeek = TelemetryClock.GetCurrentIsoWeek();

@@ -171,7 +171,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
     }
 
     private sealed class ThrowingProjectIdentityProvider : IProjectIdentityProvider {
-        public string EnsureComputedOnWorkerThread() {
+        public ResolvedTelemetryIdentity EnsureResolvedOnWorkerThread() {
             throw new IOException("Simulated project identity failure.");
         }
     }

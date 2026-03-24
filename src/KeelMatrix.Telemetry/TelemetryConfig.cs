@@ -48,10 +48,11 @@ namespace KeelMatrix.Telemetry {
             = typeof(Client).Assembly.GetName().Version?.ToString() ?? UnknownSymbol;
 
         internal const int SchemaVersion = 1;
-        internal const int MaxPayloadBytes = 512;
+        internal const int MaxPayloadBytes = 768;
         internal const int RuntimeMaxLength = 32;
         internal const int ToolVersionMaxLength = 16;
         internal const int ProjectHashMaxLength = 64;
+        internal const int InstallationHashMaxLength = 64;
         internal const int OsMaxLength = 16;
         internal const int MaxDeadLetterItems = 400;
         internal const int MaxPendingItems = 128;

@@ -74,22 +74,24 @@ namespace KeelMatrix.Telemetry {
         }
 
         /// <summary>
-        /// Requests a one-time activation telemetry event for the current project.
+        /// Requests a one-time activation telemetry event for the current consuming codebase.
         /// </summary>
         /// <remarks>
         /// The request is best-effort, non-blocking, and never throws. Repeated calls are safe; after activation has been
-        /// recorded for the current project, later calls are ignored.
+        /// recorded for the current project, later calls are ignored. If no stable anonymous project identity can be
+        /// derived on the worker thread, no activation event is emitted.
         /// </remarks>
         public void TrackActivation() {
             client.TrackActivation();
         }
 
         /// <summary>
-        /// Requests a heartbeat telemetry event that indicates continued usage for the current project.
+        /// Requests a heartbeat telemetry event that indicates continued usage for the current consuming codebase.
         /// </summary>
         /// <remarks>
         /// The request is best-effort, non-blocking, and never throws. At most one heartbeat is emitted per project per
-        /// ISO week, and a newly recorded activation suppresses the heartbeat for that same week.
+        /// ISO week, and a newly recorded activation suppresses the heartbeat for that same week. If no stable anonymous
+        /// project identity can be derived on the worker thread, no heartbeat event is emitted.
         /// </remarks>
         public void TrackHeartbeat() {
             client.TrackHeartbeat();

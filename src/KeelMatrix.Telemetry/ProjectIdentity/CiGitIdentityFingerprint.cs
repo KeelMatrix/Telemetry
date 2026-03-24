@@ -5,10 +5,11 @@ using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     /// <summary>
-    /// Identity sources: CI-provided repo identity -> local Git origin remote -> Git root commit (best-effort).
+    /// Identity sources: normalized repo identity from CI/local Git remote -> Git root commit (best-effort).
     /// No external processes; best-effort only.
     /// </summary>
     internal sealed class CiGitIdentityFingerprint {
+        private const string RepoFingerprintPrefix = "repo.v1";
         private readonly RuntimeInfo runtimeInfo;
 
         internal CiGitIdentityFingerprint(RuntimeInfo runtimeInfo) {
@@ -45,9 +46,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (!RepoKeyNormalizer.TryNormalize(identityRaw, out var normalizedRepoKey) || normalizedRepoKey is null)
                 return false;
 
-            var prefix = Encoding.UTF8.GetBytes("ci.v1");
-            var key = Encoding.UTF8.GetBytes(normalizedRepoKey);
-            fingerprintBytes = Sha256(Concat(prefix, key));
+            fingerprintBytes = ComputeRepoFingerprint(normalizedRepoKey);
             return true;
         }
 
@@ -119,9 +118,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 if (GitDiscovery.TryReadOriginRemoteUrl(gitDir, out var originUrlRaw) &&
                     RepoKeyNormalizer.TryNormalize(originUrlRaw, out var normalizedOrigin) &&
                     normalizedOrigin is not null) {
-                    var prefix = Encoding.UTF8.GetBytes("git-remote.v1");
-                    var key = Encoding.UTF8.GetBytes(normalizedOrigin);
-                    fingerprintBytes = Sha256(Concat(prefix, key));
+                    fingerprintBytes = ComputeRepoFingerprint(normalizedOrigin);
                     return true;
                 }
 
@@ -135,6 +132,12 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
 
             return false;
+        }
+
+        private static byte[] ComputeRepoFingerprint(string normalizedRepoKey) {
+            var prefix = Encoding.UTF8.GetBytes(RepoFingerprintPrefix);
+            var key = Encoding.UTF8.GetBytes(normalizedRepoKey);
+            return Sha256(Concat(prefix, key));
         }
 
         private static bool TryGetEnv(string name, out string value) {

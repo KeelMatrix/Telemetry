@@ -29,7 +29,10 @@ namespace KeelMatrix.Telemetry.Serialization {
             if (telemetryEvent.TelemetryVersion.Length > TelemetryConfig.ToolVersionMaxLength)
                 return false;
 
-            if (telemetryEvent.ProjectHash.Length > TelemetryConfig.ProjectHashMaxLength)
+            if (!HasValidHash(telemetryEvent.ProjectHash, TelemetryConfig.ProjectHashMaxLength))
+                return false;
+
+            if (!HasValidHash(telemetryEvent.InstallationHash, TelemetryConfig.InstallationHashMaxLength))
                 return false;
 
             return telemetryEvent switch {
@@ -37,6 +40,10 @@ namespace KeelMatrix.Telemetry.Serialization {
                 HeartbeatEvent h => ValidateHeartbeat(h),
                 _ => false
             };
+        }
+
+        private static bool HasValidHash(string value, int maxLength) {
+            return !string.IsNullOrWhiteSpace(value) && value.Length <= maxLength;
         }
 
         private static bool ValidateActivation(ActivationEvent a) {

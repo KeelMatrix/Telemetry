@@ -11,11 +11,12 @@ namespace KeelMatrix.Telemetry.Events {
             string telemetryVersion,
             int schemaVersion,
             string projectHash,
+            string installationHash,
             string runtime,
             string os,
             bool ci,
             string timestamp)
-            : base("activation", tool, toolVersion, telemetryVersion, schemaVersion, projectHash) {
+            : base("activation", tool, toolVersion, telemetryVersion, schemaVersion, projectHash, installationHash) {
             Runtime = runtime;
             Os = os;
             Ci = ci;

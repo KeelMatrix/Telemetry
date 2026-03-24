@@ -1,100 +1,50 @@
 // Copyright (c) KeelMatrix
 
 using System.Globalization;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     /// <summary>
-    /// Computes and caches a stable, anonymous per-project hash for a telemetry client instance.
+    /// Computes and caches stable anonymous telemetry identities for a telemetry client instance.
     /// All I/O and identity detection MUST run on the telemetry worker thread.
     /// </summary>
     internal sealed class ProjectIdentityProvider : IProjectIdentityProvider {
         private readonly MachineSaltProvider machineSaltProvider;
         private readonly IdentityFingerprintPipeline identityFingerprintPipeline;
-        private readonly string uninitializedPlaceholderHash;
 
-        private int isComputed; // 0 = not computed, 1 = computed
-        private string? cachedProjectHash;
+        private int isResolved; // 0 = not resolved, 1 = resolved
+        private ResolvedTelemetryIdentity? cachedIdentity;
 
         internal ProjectIdentityProvider(TelemetryRuntimeContext runtimeContext, RuntimeInfo runtimeInfo) {
             machineSaltProvider = new MachineSaltProvider(runtimeContext);
             identityFingerprintPipeline = new IdentityFingerprintPipeline(runtimeInfo);
-            uninitializedPlaceholderHash = ComputeUninitializedPlaceholderHashCore();
         }
 
         /// <summary>
-        /// Ensures the project hash is computed and cached.
+        /// Ensures the telemetry identities are resolved and cached.
         /// MUST be called only from the telemetry worker thread.
         /// </summary>
-        public string EnsureComputedOnWorkerThread() {
-            if (Volatile.Read(ref isComputed) == 1)
-                return cachedProjectHash ?? throw new InvalidOperationException("Project hash was marked computed but cache is empty.");
+        public ResolvedTelemetryIdentity EnsureResolvedOnWorkerThread() {
+            if (Volatile.Read(ref isResolved) == 1)
+                return cachedIdentity ?? throw new InvalidOperationException("Telemetry identities were marked resolved but cache is empty.");
 
             var machineSaltBytes = machineSaltProvider.GetOrCreateMachineSaltBytes();
+            var installationHash = ComputeInstallationHash(machineSaltBytes);
 
-            bool identityFromSources;
-            byte[] identityFingerprintBytes;
+            string? projectHash = null;
             try {
-                identityFromSources = identityFingerprintPipeline.TryComputeIdentityFingerprintBytes(out identityFingerprintBytes);
+                if (identityFingerprintPipeline.TryComputeStableProjectFingerprintBytes(out var identityFingerprintBytes))
+                    projectHash = ComputeProjectHash(identityFingerprintBytes);
             }
             catch {
-                identityFromSources = false;
-                identityFingerprintBytes = [];
+                projectHash = null;
             }
 
-            if (!identityFromSources) {
-                identityFingerprintBytes = ComputeFallbackFingerprintBytes();
-            }
-
-            // ProjectHash = SHA256( MachineSaltBytes || IdentityFingerprintBytes ) => lowercase hex, 64 chars
-            var final = Sha256(Concat(machineSaltBytes, identityFingerprintBytes));
-            var computedProjectHash = ToLowerHex(final);
-            cachedProjectHash = computedProjectHash;
-            Volatile.Write(ref isComputed, 1);
-            return computedProjectHash;
-        }
-
-        /// <summary>
-        /// Deterministic, non-I/O placeholder hash for cases where callers attempt to access a project hash
-        /// before the worker computed it. This is NOT the final ProjectHash formula and should not be emitted.
-        /// </summary>
-        internal string ComputeUninitializedPlaceholderHash() {
-            return uninitializedPlaceholderHash;
-        }
-
-        private static string ComputeUninitializedPlaceholderHashCore() {
-            try {
-                var fallbackFingerprint = ComputeFallbackFingerprintBytes();
-                var bytes = Concat(Encoding.UTF8.GetBytes("uninitialized.v1"), fallbackFingerprint);
-                return ToLowerHex(Sha256(bytes));
-            }
-            catch {
-                // Must never throw; return a valid sha256 hex string.
-                return new string('0', 64);
-            }
-        }
-
-        /// <summary>
-        /// FallbackFingerprint = SHA256( "fallback.v1" || EntryAssemblyNameOrUnknown || EntryAssemblyPublicKeyTokenOrNopk )
-        /// </summary>
-        private static byte[] ComputeFallbackFingerprintBytes() {
-            var entry = Assembly.GetEntryAssembly();
-            var name = entry?.GetName().Name ?? TelemetryConfig.UnknownSymbol;
-
-            string pk;
-            try {
-                var pkt = entry?.GetName().GetPublicKeyToken();
-                pk = pkt is { Length: > 0 } ? ToLowerHex(pkt) : "nopk";
-            }
-            catch {
-                pk = "nopk";
-            }
-
-            // Concatenation semantics: UTF8("fallback.v1") + UTF8(name) + UTF8(pk)
-            var input = Encoding.UTF8.GetBytes("fallback.v1" + name + pk);
-            return Sha256(input);
+            var resolvedIdentity = new ResolvedTelemetryIdentity(projectHash, installationHash);
+            cachedIdentity = resolvedIdentity;
+            Volatile.Write(ref isResolved, 1);
+            return resolvedIdentity;
         }
 
         private static byte[] Sha256(byte[] input) {
@@ -107,6 +57,19 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             Buffer.BlockCopy(a, 0, combined, 0, a.Length);
             Buffer.BlockCopy(b, 0, combined, a.Length, b.Length);
             return combined;
+        }
+
+        private static string ComputeProjectHash(byte[] fingerprintBytes) {
+            return ComputeHashHex("project.v1", fingerprintBytes);
+        }
+
+        private static string ComputeInstallationHash(byte[] machineSaltBytes) {
+            return ComputeHashHex("installation.v1", machineSaltBytes);
+        }
+
+        private static string ComputeHashHex(string prefix, byte[] payloadBytes) {
+            var prefixBytes = Encoding.UTF8.GetBytes(prefix);
+            return ToLowerHex(Sha256(Concat(prefixBytes, payloadBytes)));
         }
 
         internal static string ToLowerHex(byte[] bytes) {

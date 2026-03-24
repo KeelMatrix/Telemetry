@@ -3,6 +3,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using KeelMatrix.Telemetry.Infrastructure;
 using KeelMatrix.Telemetry.ProjectIdentity;
@@ -99,6 +100,87 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     }
 
     [Fact]
+    public async Task ActivationPayload_ContainsProjectHashAndInstallationHash() {
+        var projectDir = CreateGitRepoRoot("worker-activation-payload", "https://github.com/KeelMatrix/Telemetry.git");
+
+        using var overrideScope = new StartingPointsOverrideScope(projectDir);
+        using var harness = new WorkerHarness();
+        using var worker = harness.CreateWorker();
+
+        worker.RequestActivation();
+
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
+
+        using var doc = JsonDocument.Parse(harness.Sender.Received.Single(r => r.Event == "activation").Body);
+        doc.RootElement.GetProperty("project_hash").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("installation_hash").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task HeartbeatPayload_ContainsProjectHashAndInstallationHash() {
+        var projectDir = CreateGitRepoRoot("worker-heartbeat-payload", "https://github.com/KeelMatrix/Telemetry.git");
+
+        using var overrideScope = new StartingPointsOverrideScope(projectDir);
+        using var harness = new WorkerHarness();
+        using var worker = harness.CreateWorker();
+
+        worker.RequestHeartbeat();
+
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "heartbeat"), TimeSpan.FromSeconds(5));
+
+        using var doc = JsonDocument.Parse(harness.Sender.Received.Single(r => r.Event == "heartbeat").Body);
+        doc.RootElement.GetProperty("project_hash").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("installation_hash").GetString().Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task ActivationAndHeartbeat_UseSameProjectHashResolution_ForSameRepo() {
+        var projectDir = CreateGitRepoRoot("worker-shared-project-hash", "https://github.com/KeelMatrix/Telemetry.git");
+
+        using var overrideScope = new StartingPointsOverrideScope(projectDir);
+        using var activationHarness = new WorkerHarness();
+        using var activationWorker = activationHarness.CreateWorker();
+
+        activationWorker.RequestActivation();
+        await WaitUntilAsync(() => activationHarness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
+
+        using var heartbeatHarness = new WorkerHarness();
+        using var heartbeatWorker = heartbeatHarness.CreateWorker();
+
+        heartbeatWorker.RequestHeartbeat();
+        await WaitUntilAsync(() => heartbeatHarness.Sender.Received.Any(r => r.Event == "heartbeat"), TimeSpan.FromSeconds(5));
+
+        var activationProjectHash = ReadHashField(
+            activationHarness.Sender.Received.Single(r => r.Event == "activation").Body,
+            "project_hash");
+        var heartbeatProjectHash = ReadHashField(
+            heartbeatHarness.Sender.Received.Single(r => r.Event == "heartbeat").Body,
+            "project_hash");
+
+        activationProjectHash.Should().Be(heartbeatProjectHash);
+    }
+
+    [Fact]
+    public async Task RequestsAreSuppressed_WhenStableProjectIdentityIsUnavailable() {
+        var emptyDir = CreateEmptyIdentityRoot("worker-no-project-identity");
+
+        using var overrideScope = new StartingPointsOverrideScope(emptyDir);
+        using var harness = new WorkerHarness();
+        harness.RuntimeInfo.SetCiOverrideForTests(false);
+        using var worker = harness.CreateWorker();
+
+        worker.RequestActivation();
+        worker.RequestHeartbeat();
+
+        await Task.Delay(300);
+
+        harness.Sender.Received.Should().BeEmpty();
+        harness.CountMarkerFiles("activation.*.json").Should().Be(0);
+        harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
+        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
+    }
+
+    [Fact]
     public async Task DeliveryLoop_ClaimsSendsCompletesOrAbandons() {
         using var harness = new WorkerHarness();
         var queue = harness.CreateQueue();
@@ -130,6 +212,40 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         }
 
         condition().Should().BeTrue($"condition should become true within {timeout}");
+    }
+
+    private static string ReadHashField(string json, string fieldName) {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.GetProperty(fieldName).GetString() ?? string.Empty;
+    }
+
+    private static string CreateGitRepoRoot(string name, string originRemoteUrl) {
+        var repoDir = Path.Combine(Path.GetTempPath(), "KeelMatrix.Telemetry.WorkerIdentityTests", name + "." + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(repoDir, ".git"));
+        File.WriteAllText(
+            Path.Combine(repoDir, ".git", "config"),
+            """
+            [remote "origin"]
+                url = PLACEHOLDER_REMOTE
+            """
+                .Replace("PLACEHOLDER_REMOTE", originRemoteUrl, StringComparison.Ordinal));
+        return repoDir;
+    }
+
+    private static string CreateEmptyIdentityRoot(string name) {
+        var root = Path.Combine(Path.GetTempPath(), "KeelMatrix.Telemetry.WorkerIdentityTests", name + "." + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private sealed class StartingPointsOverrideScope : IDisposable {
+        public StartingPointsOverrideScope(params string[] startingPoints) {
+            GitDiscovery.SetStartingPointsOverrideForTests(startingPoints);
+        }
+
+        public void Dispose() {
+            GitDiscovery.SetStartingPointsOverrideForTests(null);
+        }
     }
 
     private sealed class WorkerHarness : IDisposable {
@@ -171,6 +287,10 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             return DurableTelemetryQueue.CreateSafe(RuntimeContext);
         }
 
+        public int CountMarkerFiles(string pattern) {
+            return CountFiles(MarkersDir, pattern);
+        }
+
         public TelemetryDeliveryWorker CreateWorker() {
             return new TelemetryDeliveryWorker(RuntimeContext, RuntimeInfo, new ProjectIdentityProvider(RuntimeContext, RuntimeInfo), Sender);
         }
@@ -194,6 +314,13 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         private static void ResetProcessDisabledForTests() {
             var field = typeof(TelemetryConfig).GetField("processDisabled", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
             field?.SetValue(null, 0);
+        }
+
+        private static int CountFiles(string dir, string pattern) {
+            if (!Directory.Exists(dir))
+                return 0;
+
+            return Directory.EnumerateFiles(dir, pattern).Count();
         }
     }
 

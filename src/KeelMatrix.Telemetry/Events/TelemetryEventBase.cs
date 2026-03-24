@@ -12,13 +12,15 @@ namespace KeelMatrix.Telemetry.Events {
             string toolVersion,
             string telemetryVersion,
             int schemaVersion,
-            string projectHash) {
+            string projectHash,
+            string installationHash) {
             Event = @event;
             Tool = tool;
             ToolVersion = toolVersion;
             TelemetryVersion = telemetryVersion;
             SchemaVersion = schemaVersion;
             ProjectHash = projectHash;
+            InstallationHash = installationHash;
         }
 
         /// <summary>The event type identifier.</summary>
@@ -36,7 +38,10 @@ namespace KeelMatrix.Telemetry.Events {
         /// <summary>The telemetry schema version.</summary>
         public int SchemaVersion { get; }
 
-        /// <summary>A stable, anonymous project identifier.</summary>
+        /// <summary>A stable anonymous consuming-codebase identifier.</summary>
         public string ProjectHash { get; }
+
+        /// <summary>A stable anonymous installation identifier.</summary>
+        public string InstallationHash { get; }
     }
 }

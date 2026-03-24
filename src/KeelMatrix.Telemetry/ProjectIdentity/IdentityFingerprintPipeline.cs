@@ -8,7 +8,11 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             ciGitIdentityFingerprint = new CiGitIdentityFingerprint(runtimeInfo);
         }
 
-        internal bool TryComputeIdentityFingerprintBytes(out byte[] fingerprintBytes) {
+        /// <summary>
+        /// Resolves a stable anonymous consuming-codebase fingerprint.
+        /// The result must not include installation-local inputs such as machine salt.
+        /// </summary>
+        internal bool TryComputeStableProjectFingerprintBytes(out byte[] fingerprintBytes) {
             try {
                 if (ciGitIdentityFingerprint.TryCompute(out fingerprintBytes))
                     return true;

@@ -49,6 +49,7 @@ public sealed class TelemetrySerializerTests {
             "telemetry_version",
             "schema_version",
             "project_hash",
+            "installation_hash",
             "runtime",
             "os",
             "ci",
@@ -101,6 +102,7 @@ public sealed class TelemetrySerializerTests {
             toolVersion: "2.3.4",
             telemetryVersion: "9.8.7",
             projectHash: "projecthash123",
+            installationHash: "installhash456",
             runtime: "dotnet",
             os: "windows",
             ci: true,
@@ -109,7 +111,7 @@ public sealed class TelemetrySerializerTests {
         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
 
         json.Should().Be(
-            "{\"runtime\":\"dotnet\",\"os\":\"windows\",\"ci\":true,\"timestamp\":\"2026-02-27T00:00:00Z\",\"event\":\"activation\",\"tool\":\"serializer_snapshot_activation\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"projecthash123\"}");
+            "{\"runtime\":\"dotnet\",\"os\":\"windows\",\"ci\":true,\"timestamp\":\"2026-02-27T00:00:00Z\",\"event\":\"activation\",\"tool\":\"serializer_snapshot_activation\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"projecthash123\",\"installation_hash\":\"installhash456\"}");
     }
 
     [Fact]
@@ -120,12 +122,13 @@ public sealed class TelemetrySerializerTests {
             toolVersion: "2.3.4",
             telemetryVersion: "9.8.7",
             projectHash: "projecthash123",
+            installationHash: "installhash456",
             week: "2026-W09");
 
         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
 
         json.Should().Be(
-            "{\"week\":\"2026-W09\",\"event\":\"heartbeat\",\"tool\":\"serializer_snapshot_heartbeat\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"projecthash123\"}");
+            "{\"week\":\"2026-W09\",\"event\":\"heartbeat\",\"tool\":\"serializer_snapshot_heartbeat\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"projecthash123\",\"installation_hash\":\"installhash456\"}");
     }
 
     private static TelemetryRuntimeContext CreateRuntimeContext(string toolNameUpper) {
@@ -139,6 +142,7 @@ public sealed class TelemetrySerializerTests {
         string? toolVersion = null,
         string? telemetryVersion = null,
         string? projectHash = null,
+        string? installationHash = null,
         string? runtime = null,
         string? os = null,
         bool? ci = null,
@@ -149,6 +153,7 @@ public sealed class TelemetrySerializerTests {
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
             projectHash: projectHash ?? "abc",
+            installationHash: installationHash ?? "def",
             runtime: runtime ?? "dotnet",
             os: os ?? "linux",
             ci: ci ?? false,
@@ -162,6 +167,7 @@ public sealed class TelemetrySerializerTests {
         string? toolVersion = null,
         string? telemetryVersion = null,
         string? projectHash = null,
+        string? installationHash = null,
         string? week = null) {
         return new HeartbeatEvent(
             tool: tool ?? runtimeContext.ToolName,
@@ -169,6 +175,7 @@ public sealed class TelemetrySerializerTests {
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
             projectHash: projectHash ?? "abc",
+            installationHash: installationHash ?? "def",
             week: week ?? "2026-W09");
     }
 

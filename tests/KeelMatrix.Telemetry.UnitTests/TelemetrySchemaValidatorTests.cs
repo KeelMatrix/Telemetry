@@ -31,6 +31,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
+            installationHash: "def",
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -51,6 +52,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
+            installationHash: "def",
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -71,6 +73,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: tooLong,
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
+            installationHash: "def",
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -79,9 +82,11 @@ public sealed class TelemetrySchemaValidatorTests {
         TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
-    [Fact]
-    public void IsValid_ReturnsFalse_WhenProjectHashTooLong() {
-        var runtimeContext = CreateRuntimeContext("project_hash_len");
+    [Theory]
+    [InlineData("project_hash_len", true)]
+    [InlineData("installation_hash_len", false)]
+    public void IsValid_ReturnsFalse_WhenHashTooLong(string toolNameUpper, bool projectHashTooLong) {
+        var runtimeContext = CreateRuntimeContext(toolNameUpper);
 
         var tooLong = new string('a', TelemetryConfig.ProjectHashMaxLength + 1);
 
@@ -90,7 +95,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: tooLong,
+            projectHash: projectHashTooLong ? tooLong : "abc",
+            installationHash: projectHashTooLong ? "def" : tooLong,
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -110,6 +116,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
+            installationHash: "def",
             runtime: runtime,
             os: os,
             ci: false,
@@ -129,6 +136,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
+            installationHash: "def",
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -153,6 +161,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
             projectHash: "abc",
+            installationHash: "def",
             week: week);
 
         TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
@@ -169,6 +178,7 @@ public sealed class TelemetrySchemaValidatorTests {
         string? toolVersion = null,
         string? telemetryVersion = null,
         string? projectHash = null,
+        string? installationHash = null,
         string? runtime = null,
         string? os = null,
         bool? ci = null,
@@ -179,6 +189,7 @@ public sealed class TelemetrySchemaValidatorTests {
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
             projectHash: projectHash ?? "abc",
+            installationHash: installationHash ?? "def",
             runtime: runtime ?? "dotnet",
             os: os ?? "linux",
             ci: ci ?? false,

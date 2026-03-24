@@ -6,14 +6,49 @@ using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     internal static class GitDiscovery {
-        internal static IEnumerable<string> GetStartingPoints() {
-            var seen = new HashSet<string>(Path.DirectorySeparatorChar == '\\' ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        private static string[]? startingPointsOverrideForTests;
 
-            foreach (var p in new[] {
+        /// <summary>
+        /// Overrides identity discovery starting points for tests.
+        /// A null or empty value restores the default process-based starting points.
+        /// </summary>
+        internal static void SetStartingPointsOverrideForTests(params string[]? startingPoints) {
+            string[]? normalized = null;
+
+            if (startingPoints is { Length: > 0 }) {
+                normalized = [.. startingPoints
+                    .Where(p => !string.IsNullOrWhiteSpace(p))
+                    .Select(p => p.Trim())];
+
+                if (normalized.Length == 0)
+                    normalized = null;
+            }
+
+            Volatile.Write(ref startingPointsOverrideForTests, normalized);
+        }
+
+        internal static IEnumerable<string> GetStartingPoints() {
+            var overridePoints = Volatile.Read(ref startingPointsOverrideForTests);
+            if (overridePoints is { Length: > 0 }) {
+                foreach (var point in DeduplicateAndNormalize(overridePoints))
+                    yield return point;
+
+                yield break;
+            }
+
+            foreach (var point in DeduplicateAndNormalize([
                 SafeGetCurrentDirectory(),
                 SafeGetBaseDirectory(),
                 SafeGetEntryAssemblyDirectory()
-            }) {
+            ])) {
+                yield return point;
+            }
+        }
+
+        private static IEnumerable<string> DeduplicateAndNormalize(IEnumerable<string> rawPoints) {
+            var seen = new HashSet<string>(Path.DirectorySeparatorChar == '\\' ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+            foreach (var p in rawPoints) {
                 if (string.IsNullOrWhiteSpace(p))
                     continue;
 

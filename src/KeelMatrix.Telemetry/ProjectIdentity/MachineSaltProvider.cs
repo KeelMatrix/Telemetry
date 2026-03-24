@@ -12,7 +12,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         }
 
         /// <summary>
-        /// Best-effort read-or-create. Stored at:
+        /// Best-effort read-or-create of the persisted installation salt used to derive <c>installation_hash</c>.
+        /// Stored at:
         /// Path.Combine(TelemetryRuntimeContext.GetRootDirectory(), "telemetry.salt")
         /// The persisted format remains a hex string of 32 random bytes.
         /// </summary>

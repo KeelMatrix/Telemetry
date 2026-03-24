@@ -66,7 +66,8 @@ All events include only these base fields:
 - toolVersion
 - telemetryVersion
 - schemaVersion
-- projectHash (anonymous, non-reversible)
+- projectHash (consuming codebase identity; anonymous and non-reversible)
+- installationHash (installation identity; anonymous and non-reversible)
 
 Activation also includes:
 
@@ -112,7 +113,7 @@ To ensure reliability and non-blocking behavior, the library uses local filesyst
   - `processing/`
   - `dead/`
 - `markers/` (idempotency for activation and weekly heartbeat)
-- `telemetry.salt` (machine salt for anonymous project hashing)
+- `telemetry.salt` (persisted salt used only to derive installation identity)
 
 These files contain only minimal telemetry metadata and never include user content.
 

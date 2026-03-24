@@ -24,7 +24,7 @@ public sealed class CiGitIdentityFingerprintTests {
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
 
-        bytes.Should().Equal(ExpectedCiFingerprint("https://github.com/keelmatrix/telemetry"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://github.com/keelmatrix/telemetry"));
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://gitlab.com/group/subgroup/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://gitlab.com/group/subgroup/repo"));
     }
 
     [Fact]
@@ -49,7 +49,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://gitlab.example.com/group/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://gitlab.example.com/group/repo"));
     }
 
     [Fact]
@@ -62,7 +62,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://dev.azure.com/org/project/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://dev.azure.com/org/project/repo"));
     }
 
     [Fact]
@@ -74,7 +74,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://dev.azure.com/org/project/_git/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://dev.azure.com/org/project/_git/repo"));
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://bitbucket.org/workspace/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://bitbucket.org/workspace/repo"));
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://bitbucket.org/workspace/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://bitbucket.org/workspace/repo"));
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public sealed class CiGitIdentityFingerprintTests {
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedCiFingerprint("https://github.com/keelmatrix/telemetry"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://github.com/keelmatrix/telemetry"));
     }
 
     private static bool InvokeTryComputeFromCi(RuntimeInfo runtimeInfo, out byte[] fingerprintBytes) {
@@ -141,9 +141,9 @@ public sealed class CiGitIdentityFingerprintTests {
         return ok;
     }
 
-    private static byte[] ExpectedCiFingerprint(string expectedNormalizedRepoKey) {
-        // Mirrors CiGitIdentityFingerprint: SHA256( UTF8("ci.v1") + UTF8(normalizedRepoKey) )
-        var prefix = Encoding.UTF8.GetBytes("ci.v1");
+    private static byte[] ExpectedRepoFingerprint(string expectedNormalizedRepoKey) {
+        // Mirrors CiGitIdentityFingerprint: SHA256( UTF8("repo.v1") + UTF8(normalizedRepoKey) )
+        var prefix = Encoding.UTF8.GetBytes("repo.v1");
         var key = Encoding.UTF8.GetBytes(expectedNormalizedRepoKey);
         var payload = new byte[prefix.Length + key.Length];
         Buffer.BlockCopy(prefix, 0, payload, 0, prefix.Length);

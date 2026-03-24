@@ -11,8 +11,9 @@ namespace KeelMatrix.Telemetry.Events {
             string telemetryVersion,
             int schemaVersion,
             string projectHash,
+            string installationHash,
             string week)
-            : base("heartbeat", tool, toolVersion, telemetryVersion, schemaVersion, projectHash) {
+            : base("heartbeat", tool, toolVersion, telemetryVersion, schemaVersion, projectHash, installationHash) {
             Week = week;
         }
 

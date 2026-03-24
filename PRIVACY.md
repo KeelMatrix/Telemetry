@@ -49,7 +49,8 @@ Common fields (all events):
 - `toolVersion` — the calling library/tool version
 - `telemetryVersion` — the KeelMatrix.Telemetry version
 - `schemaVersion` — currently `1`
-- `projectHash` — a stable, anonymous hash derived from local project identity (not reversible)
+- `projectHash` — consuming codebase identity (stable, anonymous, not reversible)
+- `installationHash` — installation identity (stable, anonymous, not reversible)
 
 Activation-only:
 - `runtime` — runtime identifier (e.g., ".NET 8.0" normalized)
@@ -82,7 +83,7 @@ To be crash-safe and non-blocking, the library uses local filesystem storage und
   - `processing/`
   - `dead/` (dead-letter)
 - Marker files directory: `markers/` used for idempotency (activation/weekly heartbeat)
-- A machine salt file: `telemetry.salt` used only to stabilize the anonymous project identity hash
+- A persisted salt file: `telemetry.salt` used only to derive installation identity
 
 These files contain only minimal telemetry queue/marker data and do not include user content.
 
