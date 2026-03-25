@@ -30,6 +30,33 @@ Set-StrictMode -Version Latest
 function Write-Heading($text){ Write-Host "=== $text ===" -ForegroundColor Cyan }
 function New-Timestamp(){ Get-Date -Format 'yyyyMMdd-HHmmss' }
 
+function Invoke-NativeCommand {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+    [string]$WorkingDirectory = (Get-Location).Path
+  )
+
+  $psi = [System.Diagnostics.ProcessStartInfo]::new()
+  $psi.FileName = $FilePath
+  $psi.WorkingDirectory = $WorkingDirectory
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $false
+  $psi.RedirectStandardError = $false
+
+  foreach($arg in $ArgumentList) {
+    [void]$psi.ArgumentList.Add($arg)
+  }
+
+  $process = [System.Diagnostics.Process]::Start($psi)
+  if($null -eq $process) {
+    throw "Failed to start native command: $FilePath"
+  }
+
+  $process.WaitForExit()
+  return $process.ExitCode
+}
+
 $ScriptDir = Split-Path -Parent $PSCommandPath
 $RepoRoot  = Resolve-Path (Join-Path $ScriptDir '..')
 
@@ -109,8 +136,7 @@ foreach($proj in $benchProjects){
   ) + $bdnArgs
 
   Write-Host ("dotnet " + ($cmd -join ' '))
-  & dotnet @cmd
-  $exitCode = $LASTEXITCODE
+  $exitCode = Invoke-NativeCommand -FilePath 'dotnet' -ArgumentList $cmd -WorkingDirectory (Get-Location).Path
   if ($exitCode -ne 0) {
     Write-Error "dotnet run failed ($exitCode) for $projName"
     $failed++

@@ -44,25 +44,6 @@ jobs:
       - name: Test
         run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build
 
-      - name: Benchmarks
-        if: matrix.os == 'ubuntu-latest'
-        shell: pwsh
-        run: >
-          ./bench/Run-Benchmarks.ps1
-          -Job Short
-          -Ci
-          -CoolDownSec 0
-          -Filter "*ClientSignalBench*" ,"*TelemetrySerializerBench*" ,"*TelemetryDispatcherBench*"
-
-      - name: Upload benchmark artifacts
-        if: always() && matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v7
-        with:
-          name: benchmarks-${{ matrix.os }}
-          path: ./artifacts/benchmarks
-          if-no-files-found: ignore
-          overwrite: true
-
   validate-dependabot:
     if: github.actor == 'dependabot[bot]'
     name: Validate (ubuntu-latest)
@@ -87,24 +68,6 @@ jobs:
 
       - name: Test
         run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build
-
-      - name: Benchmarks
-        shell: pwsh
-        run: >
-          ./bench/Run-Benchmarks.ps1
-          -Job Short
-          -Ci
-          -CoolDownSec 0
-          -Filter "*ClientSignalBench*" ,"*TelemetrySerializerBench*" ,"*TelemetryDispatcherBench*"
-
-      - name: Upload benchmark artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: benchmarks-ubuntu-latest-dependabot
-          path: ./artifacts/benchmarks
-          if-no-files-found: ignore
-          overwrite: true
 
   pack:
     name: Pack
@@ -142,6 +105,53 @@ jobs:
           name: nuget-packages
           path: ./artifacts/packages
           if-no-files-found: error
+          overwrite: true
+
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - validate-dependabot
+    if: |
+      always() &&
+      !cancelled() &&
+      (needs.validate.result == 'success' || needs.validate.result == 'skipped') &&
+      (needs.validate-dependabot.result == 'success' || needs.validate-dependabot.result == 'skipped')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET SDKs
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            6.0.x
+            8.0.x
+
+      - name: Restore
+        run: dotnet restore KeelMatrix.Telemetry.slnx
+
+      - name: Build
+        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore
+
+      - name: Run benchmarks
+        shell: pwsh
+        run: >
+          ./bench/Run-Benchmarks.ps1
+          -Job Short
+          -Ci
+          -CoolDownSec 0
+          -Filter "*ClientSignalBench.*" ,"*TelemetrySerializerBench.*" ,"*TelemetryDispatcherBench.*"
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-ubuntu-latest
+          path: ./artifacts/benchmarks
+          if-no-files-found: ignore
           overwrite: true
 
   publish:
