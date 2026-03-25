@@ -10,7 +10,7 @@ public static class MachineSaltProviderIntegrationTestsCollectionDefinition {
     public const string Name = $"{nameof(MachineSaltProviderIntegrationTests)}.NonParallel";
 }
 
-[Collection(MachineSaltProviderIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class MachineSaltProviderIntegrationTests {
     private const string EnvKeelMatrixNoTelemetry = "KEELMATRIX_NO_TELEMETRY";
     private const string EnvDotNetCliTelemetryOptOut = "DOTNET_CLI_TELEMETRY_OPTOUT";

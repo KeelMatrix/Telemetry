@@ -10,7 +10,7 @@ public static class ClientEndToEndIntegrationTestsCollectionDefinition {
     public const string Name = $"{nameof(ClientEndToEndIntegrationTests)}.NonParallel";
 }
 
-[Collection(ClientEndToEndIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class ClientEndToEndIntegrationTests {
     private const string EnvKeelMatrixNoTelemetry = "KEELMATRIX_NO_TELEMETRY";
     private const string EnvDotNetCliTelemetryOptOut = "DOTNET_CLI_TELEMETRY_OPTOUT";
@@ -116,15 +116,7 @@ public sealed class ClientEndToEndIntegrationTests {
                 RootDir = null;
             }
 
-            if (!string.IsNullOrWhiteSpace(RootDir)) {
-                try {
-                    if (Directory.Exists(RootDir!))
-                        Directory.Delete(RootDir!, recursive: true);
-                }
-                catch {
-                    // swallow
-                }
-            }
+            TestCleanup.RegisterToolForFinalCleanup(ToolNameUpper, typeof(ClientEndToEndIntegrationTests), RootDir);
         }
     }
 }

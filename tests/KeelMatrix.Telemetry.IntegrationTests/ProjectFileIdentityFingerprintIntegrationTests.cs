@@ -14,7 +14,7 @@ public static class ProjectFileIdentityFingerprintIntegrationTestsCollectionDefi
     public const string Name = $"{nameof(ProjectFileIdentityFingerprintIntegrationTests)}.NonParallel";
 }
 
-[Collection(ProjectFileIdentityFingerprintIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class ProjectFileIdentityFingerprintIntegrationTests : IDisposable {
     private readonly string originalCurrentDirectory;
     private readonly string root;

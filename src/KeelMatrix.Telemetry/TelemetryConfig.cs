@@ -159,6 +159,10 @@ namespace KeelMatrix.Telemetry {
             Interlocked.Exchange(ref processDisabled, 1);
         }
 
+        internal static void ResetProcessDisabledForTests() {
+            Interlocked.Exchange(ref processDisabled, 0);
+        }
+
         /// <summary>
         /// Determines whether telemetry is disabled for the current process, either explicitly
         /// or through environment-based opt-out signals.

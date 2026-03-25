@@ -11,6 +11,7 @@ using KeelMatrix.Telemetry.Infrastructure;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;
 
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class ClientIsolationIntegrationTests {
     [Fact]
     public async Task Clients_WithSameToolName_ReuseTheSameWorker_AndEmitSingleActivation() {
@@ -217,8 +218,7 @@ public sealed class ClientIsolationIntegrationTests {
                     runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
                     var rootDir = runtimeContext.GetRootDirectory();
 
-                    if (Directory.Exists(rootDir))
-                        Directory.Delete(rootDir, recursive: true);
+                    TestCleanup.RegisterToolForFinalCleanup(toolNameUpper, typeof(ClientIsolationIntegrationTests), rootDir);
                 }
                 catch {
                     // swallow

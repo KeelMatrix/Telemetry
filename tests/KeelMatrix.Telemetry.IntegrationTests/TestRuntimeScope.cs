@@ -18,7 +18,8 @@ internal sealed class TestRuntimeScope : IDisposable {
         RuntimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
         RootDir = RuntimeContext.GetRootDirectory();
 
-        TryDeleteDirectory(RootDir);
+        TestCleanup.TryDeleteDirectory(RootDir);
+        TestCleanup.RegisterToolForFinalCleanup(ToolNameUpper, toolType, RootDir);
     }
 
     public string ToolNameUpper { get; }
@@ -51,17 +52,7 @@ internal sealed class TestRuntimeScope : IDisposable {
     }
 
     public void Dispose() {
-        TryDeleteDirectory(RootDir);
-    }
-
-    private static void TryDeleteDirectory(string dir) {
-        try {
-            if (Directory.Exists(dir))
-                Directory.Delete(dir, recursive: true);
-        }
-        catch {
-            // swallow
-        }
+        // Cleanup is deferred to the end of the integration test process.
     }
 
     private static void ResetProcessDisabledForTests() {

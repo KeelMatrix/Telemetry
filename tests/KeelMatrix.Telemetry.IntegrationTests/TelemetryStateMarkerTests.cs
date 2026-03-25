@@ -9,7 +9,7 @@ public static class TelemetryStateMarkerTestsCollectionDefinition {
     public const string Name = $"{nameof(TelemetryStateMarkerTests)}.NonParallel";
 }
 
-[Collection(TelemetryStateMarkerTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class TelemetryStateMarkerTests {
     [Fact]
     public void ShouldSendActivation_True_WhenNoMarker() {

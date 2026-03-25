@@ -14,7 +14,7 @@ public static class TelemetryHttpSenderIntegrationTestsCollectionDefinition {
     public const string Name = $"{nameof(TelemetryHttpSenderIntegrationTests)}.NonParallel";
 }
 
-[Collection(TelemetryHttpSenderIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
     private readonly LocalHttpServer server;
 

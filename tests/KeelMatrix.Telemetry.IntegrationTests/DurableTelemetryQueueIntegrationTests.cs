@@ -11,7 +11,7 @@ public static class DurableTelemetryQueueIntegrationTestsCollectionDefinition {
     public const string Name = $"{nameof(DurableTelemetryQueueIntegrationTests)}.NonParallel";
 }
 
-[Collection(DurableTelemetryQueueIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class DurableTelemetryQueueIntegrationTests {
     private const string QueueFileTimestampFormat = "yyyyMMddHHmmssfffffff";
 

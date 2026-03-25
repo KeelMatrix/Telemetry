@@ -13,7 +13,7 @@ public static class GitDiscoveryIntegrationTestsCollectionDefinition {
     public const string Name = $"{nameof(GitDiscoveryIntegrationTests)}.NonParallel";
 }
 
-[Collection(GitDiscoveryIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class GitDiscoveryIntegrationTests : IDisposable {
     private readonly string originalCurrentDirectory;
     private readonly string root;

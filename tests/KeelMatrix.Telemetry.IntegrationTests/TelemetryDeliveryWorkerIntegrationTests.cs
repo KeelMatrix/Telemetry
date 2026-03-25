@@ -11,8 +11,8 @@ using KeelMatrix.Telemetry.ProjectIdentity;
 namespace KeelMatrix.Telemetry.IntegrationTests;
 
 [CollectionDefinition(Name, DisableParallelization = true)]
-public static class TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition {
-    public const string Name = $"{nameof(TelemetryDeliveryWorkerIntegrationTests)}.NonParallel";
+public sealed class TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition : ICollectionFixture<IntegrationTestCleanupFixture> {
+    public const string Name = "IntegrationTests.NonParallel";
 }
 
 [Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
@@ -269,7 +269,8 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
             RuntimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
             rootDir = RuntimeContext.GetRootDirectory();
-            TryDeleteDirectory(rootDir);
+            TestCleanup.TryDeleteDirectory(rootDir);
+            TestCleanup.RegisterToolForFinalCleanup(toolNameUpper, typeof(TelemetryDeliveryWorkerIntegrationTests), rootDir);
         }
 
         public RecordingTelemetrySender Sender { get; }
@@ -298,17 +299,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         public void Dispose() {
             Sender.Dispose();
             env.Dispose();
-            TryDeleteDirectory(rootDir);
-        }
-
-        private static void TryDeleteDirectory(string dir) {
-            try {
-                if (Directory.Exists(dir))
-                    Directory.Delete(dir, recursive: true);
-            }
-            catch {
-                // swallow
-            }
+            // Cleanup is deferred to the end of the integration test process.
         }
 
         private static void ResetProcessDisabledForTests() {

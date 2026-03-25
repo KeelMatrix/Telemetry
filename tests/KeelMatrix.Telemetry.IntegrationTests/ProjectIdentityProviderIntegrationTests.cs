@@ -10,7 +10,7 @@ public static class ProjectIdentityProviderIntegrationTestsCollectionDefinition 
     public const string Name = $"{nameof(ProjectIdentityProviderIntegrationTests)}.NonParallel";
 }
 
-[Collection(ProjectIdentityProviderIntegrationTestsCollectionDefinition.Name)]
+[Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class ProjectIdentityProviderIntegrationTests : IDisposable {
     private readonly string tempRoot;
     private readonly HashSet<string> runtimeRoots = new(StringComparer.OrdinalIgnoreCase);

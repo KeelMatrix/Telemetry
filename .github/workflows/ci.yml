@@ -44,6 +44,25 @@ jobs:
       - name: Test
         run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build
 
+      - name: Benchmarks
+        if: matrix.os == 'ubuntu-latest'
+        shell: pwsh
+        run: >
+          ./bench/Run-Benchmarks.ps1
+          -Job Short
+          -Ci
+          -CoolDownSec 0
+          -Filter "*ClientSignalBench*" ,"*TelemetrySerializerBench*" ,"*TelemetryDispatcherBench*"
+
+      - name: Upload benchmark artifacts
+        if: always() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-${{ matrix.os }}
+          path: ./artifacts/benchmarks
+          if-no-files-found: ignore
+          overwrite: true
+
   validate-dependabot:
     if: github.actor == 'dependabot[bot]'
     name: Validate (ubuntu-latest)
@@ -68,6 +87,24 @@ jobs:
 
       - name: Test
         run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build
+
+      - name: Benchmarks
+        shell: pwsh
+        run: >
+          ./bench/Run-Benchmarks.ps1
+          -Job Short
+          -Ci
+          -CoolDownSec 0
+          -Filter "*ClientSignalBench*" ,"*TelemetrySerializerBench*" ,"*TelemetryDispatcherBench*"
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmarks-ubuntu-latest-dependabot
+          path: ./artifacts/benchmarks
+          if-no-files-found: ignore
+          overwrite: true
 
   pack:
     name: Pack
