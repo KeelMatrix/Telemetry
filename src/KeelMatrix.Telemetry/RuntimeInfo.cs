@@ -32,7 +32,7 @@ namespace KeelMatrix.Telemetry {
         private static string DetectRuntime() {
             try {
                 return RuntimeInformation.FrameworkDescription switch {
-                    string s when s.Contains(".NET", StringComparison.OrdinalIgnoreCase)
+                    string s when s.IndexOf(".NET", StringComparison.OrdinalIgnoreCase) >= 0
                         => NormalizeRuntimeString(s),
                     _ => "dotnet"
                 };
