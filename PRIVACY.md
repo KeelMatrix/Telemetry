@@ -46,11 +46,11 @@ All payloads are small JSON documents and include only:
 Common fields (all events):
 - `event` — `"activation"` or `"heartbeat"`
 - `tool` — the calling library/tool identifier (a lowercase name provided by the caller)
-- `toolVersion` — the calling library/tool version
-- `telemetryVersion` — the KeelMatrix.Telemetry version
-- `schemaVersion` — currently `1`
-- `projectHash` — consuming codebase identity (stable, anonymous, not reversible)
-- `installationHash` — installation identity (stable, anonymous, not reversible)
+- `tool_version` — the calling library/tool version
+- `telemetry_version` — the KeelMatrix.Telemetry version
+- `schema_version` — currently `1`
+- `project_hash` — consuming codebase identity (stable, anonymous, not reversible)
+- `installation_hash` — installation identity (stable, anonymous, not reversible)
 
 Activation-only:
 - `runtime` — runtime identifier (e.g., ".NET 8.0" normalized)
@@ -93,7 +93,7 @@ These files contain only minimal telemetry queue/marker data and do not include 
 
 Telemetry is sent over HTTPS to:
 
-`https://keelmatrix-nuget-telemetry.dz-bb6.workers.dev`
+`https://telemetry.keelmatrix.com`
 
 Payloads are size-limited and transmission failures are swallowed; telemetry must never affect your application behavior.
 

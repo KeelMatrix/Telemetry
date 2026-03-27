@@ -63,11 +63,11 @@ All events include only these base fields:
 
 - event
 - tool
-- toolVersion
-- telemetryVersion
-- schemaVersion
-- projectHash (consuming codebase identity; anonymous and non-reversible)
-- installationHash (installation identity; anonymous and non-reversible)
+- tool_version
+- telemetry_version
+- schema_version
+- project_hash (consuming codebase identity; anonymous and non-reversible)
+- installation_hash (installation identity; anonymous and non-reversible)
 
 Activation also includes:
 
@@ -123,7 +123,7 @@ These files contain only minimal telemetry metadata and never include user conte
 
 Telemetry is sent over HTTPS to:
 
-https://keelmatrix-nuget-telemetry.dz-bb6.workers.dev
+https://telemetry.keelmatrix.com
 
 Transmission is best-effort. Failures do not propagate to callers.
 

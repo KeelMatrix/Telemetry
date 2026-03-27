@@ -5,7 +5,7 @@ namespace KeelMatrix.Telemetry {
     /// Central configuration for telemetry constants and limits.
     /// </summary>
     internal static class TelemetryConfig {
-        private const string KeelMatrixTelemetryUrl = "https://keelmatrix-nuget-telemetry.dz-bb6.workers.dev";
+        private const string KeelMatrixTelemetryUrl = "https://telemetry.keelmatrix.com";
 
         private static readonly Uri ProductionUrl =
             new(KeelMatrixTelemetryUrl, UriKind.Absolute);
