@@ -165,45 +165,14 @@ namespace KeelMatrix.Telemetry {
 
         /// <summary>
         /// Determines whether telemetry is disabled for the current process, either explicitly
-        /// or through environment-based opt-out signals.
+        /// or through environment/repository opt-out signals.
         /// </summary>
         internal static bool IsTelemetryDisabled() {
             // Process-local hard disable
             if (Volatile.Read(ref processDisabled) == 1)
                 return true;
 
-            // KeelMatrix opt-out
-            if (IsOptOutSet("KEELMATRIX_NO_TELEMETRY"))
-                return true;
-
-            // Ecosystem-standard opt-outs
-            if (IsOptOutSet("DOTNET_CLI_TELEMETRY_OPTOUT"))
-                return true;
-
-            if (IsOptOutSet("DO_NOT_TRACK"))
-                return true;
-
-            return false;
-        }
-
-        private static bool IsOptOutSet(string variableName) {
-            try {
-                var value = Environment.GetEnvironmentVariable(variableName);
-                if (string.IsNullOrWhiteSpace(value))
-                    return false;
-
-                value = value.Trim();
-
-                // Accept common truthy spellings used by tooling and CI environments.
-                return value == "1"
-                    || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("y", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("on", StringComparison.OrdinalIgnoreCase);
-            }
-            catch {
-                return false;
-            }
+            return TelemetryDisableResolver.IsTelemetryDisabled();
         }
     }
 }

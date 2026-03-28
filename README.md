@@ -16,7 +16,7 @@ This package provides:
 - Anonymous **weekly heartbeat** tracking (once per project identity per ISO week)
 - Local durable queueing with retry
 - Strictly minimal payloads
-- Explicit opt-out via environment variables
+- Explicit opt-out via process env vars or repo-local files
 
 It is intended to be used transitively by higher-level KeelMatrix libraries.
 
@@ -86,11 +86,14 @@ No user content, source code, SQL, file paths, usernames, hostnames, or IP addre
 
 ## Telemetry (Opt-Out)
 
-Telemetry is disabled when **any** of the following environment variables is set to a truthy value:
+Telemetry is disabled when the highest-precedence configured source says so.
 
-- KEELMATRIX_NO_TELEMETRY
-- DOTNET_CLI_TELEMETRY_OPTOUT
-- DO_NOT_TRACK
+Precedence:
+
+1. Process environment variables
+2. `keelmatrix.telemetry.json`
+3. `.env.local`
+4. `.env`
 
 Accepted truthy values (case-insensitive where applicable):
 
@@ -99,6 +102,60 @@ Accepted truthy values (case-insensitive where applicable):
 - yes
 - y
 - on
+
+### Current process only
+
+PowerShell:
+
+```powershell
+$env:KEELMATRIX_NO_TELEMETRY="1"
+```
+
+Supported process environment variables:
+
+- KEELMATRIX_NO_TELEMETRY
+- DOTNET_CLI_TELEMETRY_OPTOUT
+- DO_NOT_TRACK
+
+If any of those variables is set for the current process, that process-level value takes priority over repo-local files.
+
+### Current repo only
+
+Repo-local opt-out is intended for package authors working in their own repo, local tests, local CLI runs, and repo CI jobs after checkout.
+
+Example `keelmatrix.telemetry.json`:
+
+```json
+{
+  "disabled": true
+}
+```
+
+Example `.env`:
+
+```dotenv
+KEELMATRIX_NO_TELEMETRY=1
+```
+
+Example `.env.local`:
+
+```dotenv
+KEELMATRIX_NO_TELEMETRY=1
+```
+
+Repo-local `.env` and `.env.local` recognize the same opt-out keys:
+
+- KEELMATRIX_NO_TELEMETRY
+- DOTNET_CLI_TELEMETRY_OPTOUT
+- DO_NOT_TRACK
+
+Repo-local evaluation checks all candidate repo roots discovered from the runtime starting points, deduplicates them, and disables telemetry if any repo root explicitly opts out. A repo root with no supported opt-out file is ignored.
+
+`.env` and `.env.local` are convenience files. Only simple `KEY=VALUE` lines are supported, with an optional case-insensitive `export ` prefix.
+
+### Global machine or CI environment
+
+Use normal environment-variable configuration for machine-wide or CI-wide opt-out.
 
 If disabled, NullTelemetryClient is used and no events are sent, including any locally queued backlog.
 

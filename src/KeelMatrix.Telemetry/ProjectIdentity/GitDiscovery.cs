@@ -90,6 +90,31 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             return false;
         }
 
+        internal static bool TryFindRepositoryRoot(string startingPoint, out string repositoryRoot) {
+            repositoryRoot = string.Empty;
+
+            string? current = SafeGetFullPath(startingPoint);
+            if (string.IsNullOrEmpty(current))
+                return false;
+
+            if (File.Exists(current)) {
+                current = Path.GetDirectoryName(current);
+                if (string.IsNullOrEmpty(current))
+                    return false;
+            }
+
+            for (int i = 0; i <= TelemetryConfig.ProjectIdentity.MaxUpwardSteps && !string.IsNullOrEmpty(current); i++) {
+                if (LooksLikeRepositoryRoot(current!)) {
+                    repositoryRoot = current!;
+                    return true;
+                }
+
+                current = SafeGetParentDirectory(current!);
+            }
+
+            return false;
+        }
+
         internal static bool TryReadOriginRemoteUrl(string gitDir, out string originUrl) {
             originUrl = string.Empty;
 
@@ -399,6 +424,28 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (c >= 'a' && c <= 'f') return c - 'a' + 10;
             if (c >= 'A' && c <= 'F') return c - 'A' + 10;
             return -1;
+        }
+
+        private static bool LooksLikeRepositoryRoot(string dir) {
+            try {
+                var dotGitPath = Path.Combine(dir, ".git");
+                if (Directory.Exists(dotGitPath) || File.Exists(dotGitPath))
+                    return true;
+
+                if (File.Exists(Path.Combine(dir, "global.json")))
+                    return true;
+                if (File.Exists(Path.Combine(dir, "Directory.Build.props")))
+                    return true;
+                if (File.Exists(Path.Combine(dir, "Directory.Build.targets")))
+                    return true;
+                if (File.Exists(Path.Combine(dir, "NuGet.config")))
+                    return true;
+
+                return false;
+            }
+            catch {
+                return false;
+            }
         }
 
         private static string SafeGetCurrentDirectory() {
