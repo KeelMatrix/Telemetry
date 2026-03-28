@@ -27,7 +27,8 @@ namespace KeelMatrix.Telemetry {
         /// </param>
         /// <remarks>
         /// Construction is best-effort and does not throw. If telemetry is disabled or the runtime cannot initialize the
-        /// underlying pipeline, this instance falls back to a no-op implementation.
+        /// underlying pipeline, this instance degrades to a no-op implementation. Process-level opt-out is honored during
+        /// construction; repo-local opt-out is resolved later on the worker thread before any telemetry work is performed.
         /// </remarks>
         public Client(string toolName, Type toolType) {
             client = CreateClient(toolName, toolType);

@@ -103,13 +103,23 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                     return false;
             }
 
+            string? fallbackRepositoryRoot = null;
+
             for (int i = 0; i <= TelemetryConfig.ProjectIdentity.MaxUpwardSteps && !string.IsNullOrEmpty(current); i++) {
-                if (LooksLikeRepositoryRoot(current!)) {
+                if (HasGitRepositoryRoot(current!)) {
                     repositoryRoot = current!;
                     return true;
                 }
 
+                if (fallbackRepositoryRoot is null && LooksLikeNonGitRepositoryRoot(current!))
+                    fallbackRepositoryRoot = current!;
+
                 current = SafeGetParentDirectory(current!);
+            }
+
+            if (!string.IsNullOrEmpty(fallbackRepositoryRoot)) {
+                repositoryRoot = fallbackRepositoryRoot!;
+                return true;
             }
 
             return false;
@@ -426,12 +436,18 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             return -1;
         }
 
-        private static bool LooksLikeRepositoryRoot(string dir) {
+        private static bool HasGitRepositoryRoot(string dir) {
             try {
                 var dotGitPath = Path.Combine(dir, ".git");
-                if (Directory.Exists(dotGitPath) || File.Exists(dotGitPath))
-                    return true;
+                return Directory.Exists(dotGitPath) || File.Exists(dotGitPath);
+            }
+            catch {
+                return false;
+            }
+        }
 
+        private static bool LooksLikeNonGitRepositoryRoot(string dir) {
+            try {
                 if (File.Exists(Path.Combine(dir, "global.json")))
                     return true;
                 if (File.Exists(Path.Combine(dir, "Directory.Build.props")))

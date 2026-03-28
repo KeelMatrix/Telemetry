@@ -118,6 +118,7 @@ Supported process environment variables:
 - DO_NOT_TRACK
 
 If any of those variables is set for the current process, that process-level value takes priority over repo-local files.
+Process environment checks stay cheap and synchronous during client construction.
 
 ### Current repo only
 
@@ -150,14 +151,16 @@ Repo-local `.env` and `.env.local` recognize the same opt-out keys:
 - DO_NOT_TRACK
 
 Repo-local evaluation checks all candidate repo roots discovered from the runtime starting points, deduplicates them, and disables telemetry if any repo root explicitly opts out. A repo root with no supported opt-out file is ignored.
+When a Git root exists, it is preferred over higher nested non-git repo markers such as `global.json` or `Directory.Build.props`.
 
 `.env` and `.env.local` are convenience files. Only simple `KEY=VALUE` lines are supported, with an optional case-insensitive `export ` prefix.
+Repo-local file lookup is resolved on the worker thread before any queue, marker, identity, or network work is performed, so client construction does not need repo-file I/O.
 
 ### Global machine or CI environment
 
 Use normal environment-variable configuration for machine-wide or CI-wide opt-out.
 
-If disabled, NullTelemetryClient is used and no events are sent, including any locally queued backlog.
+When process-level opt-out is active during construction, the client falls back to `NullTelemetryClient`. For repo-local file-based opt-out, the concrete client may still be created, but the worker resolves the repo-local disable before emitting events, processing backlog, writing markers, resolving identities, or sending network traffic.
 
 ---
 

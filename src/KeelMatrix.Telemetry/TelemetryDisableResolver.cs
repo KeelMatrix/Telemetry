@@ -16,11 +16,30 @@ namespace KeelMatrix.Telemetry {
             "DOTNET_CLI_TELEMETRY_OPTOUT",
             "DO_NOT_TRACK"
         ];
+        private static Func<bool?>? repositoryDisableOverrideForTests;
 
-        internal static bool IsTelemetryDisabled() {
-            var processDecision = EvaluateProcessEnvironment();
-            if (processDecision != DisableDecision.Unspecified)
-                return processDecision == DisableDecision.Disabled;
+        internal static bool IsProcessTelemetryDisabled() {
+            return GetProcessTelemetryDisableDecision() == true;
+        }
+
+        internal static bool? GetProcessTelemetryDisableDecision() {
+            return EvaluateProcessEnvironment() switch {
+                DisableDecision.Disabled => true,
+                DisableDecision.Enabled => false,
+                _ => null
+            };
+        }
+
+        internal static bool IsRepositoryTelemetryDisabledOnWorkerThread() {
+            var overrideResolver = Volatile.Read(ref repositoryDisableOverrideForTests);
+            if (overrideResolver is not null) {
+                try {
+                    return overrideResolver() == true;
+                }
+                catch {
+                    return false;
+                }
+            }
 
             foreach (var repositoryRoot in GetCandidateRepositoryRoots()) {
                 if (EvaluateRepository(repositoryRoot) == DisableDecision.Disabled)
@@ -46,6 +65,10 @@ namespace KeelMatrix.Telemetry {
             }
 
             return repositoryRoots;
+        }
+
+        internal static void SetRepositoryDisableOverrideForTests(Func<bool?>? resolver) {
+            Volatile.Write(ref repositoryDisableOverrideForTests, resolver);
         }
 
         private static DisableDecision EvaluateProcessEnvironment() {

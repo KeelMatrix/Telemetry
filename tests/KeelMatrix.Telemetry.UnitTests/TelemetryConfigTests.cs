@@ -5,7 +5,7 @@ using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry.UnitTests;
 
-// TelemetryConfig has static mutable state (Runtime + env var reads).
+// TelemetryConfig has static mutable state (runtime + env var reads + test hooks).
 // Ensure these tests never run in parallel with others that may touch the same state.
 [CollectionDefinition(Name, DisableParallelization = true)]
 public static class TelemetryConfigTestsCollectionDefinition {
@@ -34,33 +34,28 @@ public sealed class TelemetryConfigTests : IDisposable {
     public TelemetryConfigTests() {
         TelemetryConfig.ResetProcessDisabledForTests();
         GitDiscovery.SetStartingPointsOverrideForTests(null);
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
     }
 
     public void Dispose() {
         TelemetryConfig.ResetProcessDisabledForTests();
         GitDiscovery.SetStartingPointsOverrideForTests(null);
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
     }
 
     [Fact]
     public void IsTelemetryDisabled_ReturnsFalse_WhenAllOptOutVarsCleared() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
+        using var _ = CreateEnvironmentSnapshot();
 
         ClearOptOutVars();
 
-        // Do not touch processDisabled (DisableTelemetryForCurrentProcess).
         TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
     }
 
     [Theory]
     [MemberData(nameof(GetTruthyValues))]
     public void IsTelemetryDisabled_ReturnsTrue_WhenKeelMatrixNoTelemetryTruthy(string truthy) {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
+        using var _ = CreateEnvironmentSnapshot();
 
         ClearOptOutVars();
         Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, truthy);
@@ -71,10 +66,7 @@ public sealed class TelemetryConfigTests : IDisposable {
     [Theory]
     [MemberData(nameof(GetTruthyValues))]
     public void IsTelemetryDisabled_ReturnsTrue_WhenDotNetCliTelemetryOptOutTruthy(string truthy) {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
+        using var _ = CreateEnvironmentSnapshot();
 
         ClearOptOutVars();
         Environment.SetEnvironmentVariable(EnvDotNetCliTelemetryOptOut, truthy);
@@ -85,10 +77,7 @@ public sealed class TelemetryConfigTests : IDisposable {
     [Theory]
     [MemberData(nameof(GetTruthyValues))]
     public void IsTelemetryDisabled_ReturnsTrue_WhenDoNotTrackTruthy(string truthy) {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
+        using var _ = CreateEnvironmentSnapshot();
 
         ClearOptOutVars();
         Environment.SetEnvironmentVariable(EnvDoNotTrack, truthy);
@@ -97,92 +86,78 @@ public sealed class TelemetryConfigTests : IDisposable {
     }
 
     [Fact]
-    public void IsTelemetryDisabled_ReturnsTrue_WhenRepositoryConfigDisablesTelemetry() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsTrue_WhenRepositoryConfigDisablesTelemetry() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
         using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
-        File.WriteAllText(
-            Path.Combine(repo.Root, RepositoryConfigFileName),
+        repo.WriteFile(
             """
             {
               "disabled": true
             }
-            """);
+            """,
+            RepositoryConfigFileName);
 
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
         TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
     }
 
     [Fact]
-    public void IsTelemetryDisabled_ReturnsTrue_WhenDotEnvDisablesTelemetry() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsTrue_WhenDotEnvDisablesTelemetry() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
         using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repo.Root, ".env"), "KEELMATRIX_NO_TELEMETRY=1");
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env");
 
-        TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
     }
 
     [Fact]
-    public void IsTelemetryDisabled_ReturnsTrue_WhenDotEnvLocalDisablesTelemetry() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsTrue_WhenDotEnvLocalDisablesTelemetry() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
         using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repo.Root, ".env.local"), "KEELMATRIX_NO_TELEMETRY=1");
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env.local");
 
-        TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
     }
 
     [Fact]
-    public void IsTelemetryDisabled_ReturnsTrue_WhenLaterRepositoryRootDisablesTelemetry() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repoWithoutOptOut = CreateRepository("src\\tool");
-        using var repoWithOptOut = CreateRepository("tests\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsTrue_WhenLaterRepositoryRootDisablesTelemetry() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repoWithoutOptOut = CreateRepository("src", "tool");
+        using var repoWithOptOut = CreateRepository("tests", "tool");
         using var __ = new StartingPointsOverrideScope(repoWithoutOptOut.StartingPoint, repoWithOptOut.StartingPoint);
 
         ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repoWithOptOut.Root, ".env.local"), "DOTNET_CLI_TELEMETRY_OPTOUT=1");
+        repoWithOptOut.WriteFile("DOTNET_CLI_TELEMETRY_OPTOUT=1", ".env.local");
 
-        TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
     }
 
     [Fact]
-    public void IsTelemetryDisabled_ReturnsFalse_WhenMultipleRepositoryRootsAreAllUnspecified() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repoA = CreateRepository("src\\tool");
-        using var repoB = CreateRepository("tests\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsFalse_WhenMultipleRepositoryRootsAreAllUnspecified() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repoA = CreateRepository("src", "tool");
+        using var repoB = CreateRepository("tests", "tool");
         using var __ = new StartingPointsOverrideScope(repoA.StartingPoint, repoB.StartingPoint);
 
         ClearOptOutVars();
 
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
         TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
     }
 
     [Fact]
     public void GetCandidateRepositoryRoots_DeduplicatesResolvedRepositoryRoots() {
-        using var repo = CreateRepository("src\\tool");
-        var otherStartingPoint = Path.Combine(repo.Root, "tests", "tool");
-        Directory.CreateDirectory(otherStartingPoint);
+        using var repo = CreateRepository("src", "tool");
+        var otherStartingPoint = repo.CreateDirectory("tests", "tool");
         using var _ = new StartingPointsOverrideScope(repo.StartingPoint, otherStartingPoint);
 
         var roots = TelemetryDisableResolver.GetCandidateRepositoryRoots();
@@ -190,169 +165,182 @@ public sealed class TelemetryConfigTests : IDisposable {
         roots.Should().ContainSingle().Which.Should().Be(repo.Root);
     }
 
+    [Theory]
+    [InlineData("Directory.Build.props")]
+    [InlineData("global.json")]
+    public void GetCandidateRepositoryRoots_PrefersGitRootOverNestedNonGitMarker(string markerFileName) {
+        using var repo = CreateRepository("src", "nested", "tool");
+        using var _ = new StartingPointsOverrideScope(repo.StartingPoint);
+
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env.local");
+        repo.WriteFile(string.Empty, "src", markerFileName);
+
+        var roots = TelemetryDisableResolver.GetCandidateRepositoryRoots();
+
+        roots.Should().ContainSingle().Which.Should().Be(repo.Root);
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+    }
+
     [Fact]
-    public void IsTelemetryDisabled_PrefersDotEnvLocalOverDotEnv_WhenBothExist() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_PrefersDotEnvLocalOverDotEnv_WhenBothExist() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
         using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repo.Root, ".env"), "KEELMATRIX_NO_TELEMETRY=1");
-        File.WriteAllText(Path.Combine(repo.Root, ".env.local"), "KEELMATRIX_NO_TELEMETRY=0");
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env");
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=0", ".env.local");
 
-        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
     }
 
     [Fact]
-    public void IsTelemetryDisabled_PrefersProcessEnvironmentOverRepositoryFiles_WhenEnvironmentVariableIsSet() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_PrefersRepositoryConfigOverDotEnvLocal() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
         using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
-        Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, "false");
-        File.WriteAllText(Path.Combine(repo.Root, ".env"), "KEELMATRIX_NO_TELEMETRY=1");
-
-        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
-    }
-
-    [Fact]
-    public void IsTelemetryDisabled_ContinuesPastInvalidRepositoryConfigInEarlierRepositoryRoot() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repoWithInvalidConfig = CreateRepository("src\\tool");
-        using var repoWithOptOut = CreateRepository("tests\\tool");
-        using var __ = new StartingPointsOverrideScope(repoWithInvalidConfig.StartingPoint, repoWithOptOut.StartingPoint);
-
-        ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repoWithInvalidConfig.Root, RepositoryConfigFileName), "{ not-valid-json");
-        File.WriteAllText(Path.Combine(repoWithOptOut.Root, ".env.local"), "DO_NOT_TRACK=1");
-
-        Action act = () => TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
-        act.Should().NotThrow();
-    }
-
-    [Fact]
-    public void IsTelemetryDisabled_IgnoresUnrelatedDotEnvKeys() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
-        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
-
-        ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repo.Root, ".env"), "UNRELATED_KEY=1");
-
-        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
-    }
-
-    [Fact]
-    public void IsTelemetryDisabled_AppliesOnlyWithinResolvedRepositoryRoot() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repoA = CreateRepository("src\\tool");
-        using var repoB = CreateRepository("src\\tool");
-
-        ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repoA.Root, ".env"), "KEELMATRIX_NO_TELEMETRY=1");
-
-        using (var scope = new StartingPointsOverrideScope(repoA.StartingPoint)) {
-            TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
-        }
-
-        using (var scope = new StartingPointsOverrideScope(repoB.StartingPoint)) {
-            TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
-        }
-    }
-
-    [Fact]
-    public void IsTelemetryDisabled_ReturnsFalse_WhenRepositoryRootHasNoSupportedFiles() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
-        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
-
-        ClearOptOutVars();
-
-        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
-    }
-
-    [Fact]
-    public void IsTelemetryDisabled_PrefersRepositoryConfigOverDotEnvLocal() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
-        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
-
-        ClearOptOutVars();
-        File.WriteAllText(
-            Path.Combine(repo.Root, RepositoryConfigFileName),
+        repo.WriteFile(
             """
             {
               "disabled": false
             }
-            """);
-        File.WriteAllText(Path.Combine(repo.Root, ".env.local"), "KEELMATRIX_NO_TELEMETRY=1");
+            """,
+            RepositoryConfigFileName);
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env.local");
 
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ContinuesPastInvalidRepositoryConfigInEarlierRepositoryRoot() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repoWithInvalidConfig = CreateRepository("src", "tool");
+        using var repoWithOptOut = CreateRepository("tests", "tool");
+        using var __ = new StartingPointsOverrideScope(repoWithInvalidConfig.StartingPoint, repoWithOptOut.StartingPoint);
+
+        ClearOptOutVars();
+        repoWithInvalidConfig.WriteFile("{ not-valid-json", RepositoryConfigFileName);
+        repoWithOptOut.WriteFile("DO_NOT_TRACK=1", ".env.local");
+
+        Action act = () => TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_IgnoresUnrelatedDotEnvKeys() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+
+        ClearOptOutVars();
+        repo.WriteFile("UNRELATED_KEY=1", ".env");
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_AppliesOnlyWithinResolvedRepositoryRoot() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repoA = CreateRepository("src", "tool");
+        using var repoB = CreateRepository("src", "tool");
+
+        ClearOptOutVars();
+        repoA.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env");
+
+        using (var scope = new StartingPointsOverrideScope(repoA.StartingPoint)) {
+            TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+        }
+
+        TelemetryConfig.ResetProcessDisabledForTests();
+
+        using (var scope = new StartingPointsOverrideScope(repoB.StartingPoint)) {
+            TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsFalse_WhenRepositoryRootHasNoSupportedFiles() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+
+        ClearOptOutVars();
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_SupportsCaseInsensitiveExportPrefixInDotEnvFiles() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+
+        ClearOptOutVars();
+        repo.WriteFile("EXPORT KEELMATRIX_NO_TELEMETRY=1", ".env");
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReturnsFalse_WhenRepositoryFileValuesAreFalseyOrAbsent() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+
+        ClearOptOutVars();
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=0", ".env");
+        repo.WriteFile("UNRELATED_KEY=1", ".env.local");
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_DoesNotInspectRepoFiles_WhenProcessEnvIsPresentButFalsey() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+
+        ClearOptOutVars();
+        Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, "false");
+        repo.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env");
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
         TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
     }
 
     [Fact]
-    public void IsTelemetryDisabled_SupportsExportPrefixInDotEnvFiles() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
-        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+    public void ClientConstruction_DoesNotResolveRepositoryOptOutOnCallerThread() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var signal = new ManualResetEventSlim(false);
 
         ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repo.Root, ".env"), "EXPORT KEELMATRIX_NO_TELEMETRY=1");
 
-        TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
-    }
+        int callerThreadId = Environment.CurrentManagedThreadId;
+        int observedThreadId = 0;
 
-    [Fact]
-    public void IsTelemetryDisabled_ReturnsFalse_WhenRepositoryFileValuesAreFalseyOrAbsent() {
-        using var _ = new EnvironmentVariableSnapshot(
-            EnvKeelMatrixNoTelemetry,
-            EnvDotNetCliTelemetryOptOut,
-            EnvDoNotTrack);
-        using var repo = CreateRepository("src\\tool");
-        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            observedThreadId = Environment.CurrentManagedThreadId;
+            signal.Set();
+            return null;
+        });
 
-        ClearOptOutVars();
-        File.WriteAllText(Path.Combine(repo.Root, ".env"), "KEELMATRIX_NO_TELEMETRY=0");
-        File.WriteAllText(Path.Combine(repo.Root, ".env.local"), "UNRELATED_KEY=1");
+        var client = new Client("UNITTEST_" + Guid.NewGuid().ToString("N"), typeof(TelemetryConfigTests));
+        client.TrackActivation();
 
-        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
+        signal.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+        observedThreadId.Should().NotBe(callerThreadId);
     }
 
     [Fact]
     public void RuntimeContext_SetsToolNameLowercase_AndKeepsRootDirectoryUnresolvedUntilWorkerThread() {
-        // Use a unique tool name so we never collide with other test state.
         var toolNameUpper = "UNITTEST_" + Guid.NewGuid().ToString("N");
 
         var runtimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryConfigTests));
 
         runtimeContext.ToolName.Should().Be(toolNameUpper.ToLowerInvariant());
 
-        // RootDirectory must be cleared to null so that caller thread does no I/O.
         Action act = () => _ = runtimeContext.GetRootDirectory();
         act.Should().Throw<InvalidOperationException>()
            .WithMessage("Telemetry root directory has not been resolved yet.");
@@ -370,7 +358,6 @@ public sealed class TelemetryConfigTests : IDisposable {
 
         Path.IsPathRooted(root).Should().BeTrue();
 
-        // Do not assert the OS-specific base directory, only that it contains "KeelMatrix/{ToolNameUpper}".
         var expectedSuffix = Path.Combine("KeelMatrix", toolNameUpper);
         root.Should().Contain(expectedSuffix);
     }
@@ -410,14 +397,21 @@ public sealed class TelemetryConfigTests : IDisposable {
         return data;
     }
 
+    private static EnvironmentVariableSnapshot CreateEnvironmentSnapshot() {
+        return new EnvironmentVariableSnapshot(
+            EnvKeelMatrixNoTelemetry,
+            EnvDotNetCliTelemetryOptOut,
+            EnvDoNotTrack);
+    }
+
     private static void ClearOptOutVars() {
         Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, null);
         Environment.SetEnvironmentVariable(EnvDotNetCliTelemetryOptOut, null);
         Environment.SetEnvironmentVariable(EnvDoNotTrack, null);
     }
 
-    private static TestRepository CreateRepository(string startingPointRelativePath) {
-        return new TestRepository(startingPointRelativePath);
+    private static TestRepository CreateRepository(params string[] startingPointSegments) {
+        return new TestRepository(includeGitRoot: true, startingPointSegments);
     }
 
     private static string CreateSharedTempRoot() {
@@ -456,20 +450,44 @@ public sealed class TelemetryConfigTests : IDisposable {
     }
 
     private sealed class TestRepository : IDisposable {
-        public TestRepository(string startingPointRelativePath) {
+        public TestRepository(bool includeGitRoot, params string[] startingPointSegments) {
             Root = Path.Combine(SharedTempRoot, Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Root);
-            Directory.CreateDirectory(Path.Combine(Root, ".git"));
 
-            StartingPoint = Path.Combine(Root, startingPointRelativePath);
-            Directory.CreateDirectory(StartingPoint);
+            if (includeGitRoot)
+                Directory.CreateDirectory(Path.Combine(Root, ".git"));
+
+            StartingPoint = CreateDirectory(startingPointSegments);
         }
 
         public string Root { get; }
         public string StartingPoint { get; }
 
+        public string CreateDirectory(params string[] segments) {
+            var path = CombineWithRoot(segments);
+            Directory.CreateDirectory(path);
+            return path;
+        }
+
+        public void WriteFile(string contents, params string[] segments) {
+            var path = CombineWithRoot(segments);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            File.WriteAllText(path, contents);
+        }
+
         public void Dispose() {
             // Cleanup is deferred to process exit so temp repos are removed once per test run.
+        }
+
+        private string CombineWithRoot(params string[] segments) {
+            var path = Root;
+            foreach (var segment in segments)
+                path = Path.Combine(path, segment);
+
+            return path;
         }
     }
 

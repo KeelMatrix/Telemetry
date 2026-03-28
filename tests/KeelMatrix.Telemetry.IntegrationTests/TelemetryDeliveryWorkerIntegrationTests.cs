@@ -53,6 +53,26 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     }
 
     [Fact]
+    public async Task RepoLocalOptOutResolvedOnWorkerThread_DoesNotCreateQueueMarkersOrSends() {
+        var repoRoot = CreateGitRepoRoot("worker-repo-local-opt-out", "https://github.com/KeelMatrix/Telemetry.git");
+        var startingPoint = Path.Combine(repoRoot, "src", "tool");
+        Directory.CreateDirectory(startingPoint);
+        File.WriteAllText(Path.Combine(repoRoot, ".env.local"), "KEELMATRIX_NO_TELEMETRY=1");
+
+        using var overrideScope = new StartingPointsOverrideScope(startingPoint);
+        using var harness = new WorkerHarness();
+        using var worker = harness.CreateWorker();
+
+        worker.RequestActivation();
+        await Task.Delay(300);
+
+        harness.Sender.Received.Should().BeEmpty();
+        Directory.Exists(harness.PendingDir).Should().BeFalse();
+        Directory.Exists(harness.ProcessingDir).Should().BeFalse();
+        Directory.Exists(harness.MarkersDir).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task ActivationPlanning_EnqueuesEventAndCommitsActivationMarker() {
         using var harness = new WorkerHarness();
         using var worker = harness.CreateWorker();

@@ -164,15 +164,38 @@ namespace KeelMatrix.Telemetry {
         }
 
         /// <summary>
-        /// Determines whether telemetry is disabled for the current process, either explicitly
-        /// or through environment/repository opt-out signals.
+        /// Determines whether telemetry is disabled for the current process through process-local
+        /// or process-environment opt-out signals.
         /// </summary>
         internal static bool IsTelemetryDisabled() {
             // Process-local hard disable
             if (Volatile.Read(ref processDisabled) == 1)
                 return true;
 
-            return TelemetryDisableResolver.IsTelemetryDisabled();
+            return TelemetryDisableResolver.IsProcessTelemetryDisabled();
+        }
+
+        /// <summary>
+        /// Resolves repo-local opt-out on the worker thread and promotes it to a process-local disable.
+        /// Caller-thread paths must not invoke repo-local discovery because it may perform filesystem I/O.
+        /// </summary>
+        internal static bool ResolveRepositoryTelemetryDisableOnWorkerThread() {
+            if (Volatile.Read(ref processDisabled) == 1)
+                return true;
+
+            var processDecision = TelemetryDisableResolver.GetProcessTelemetryDisableDecision();
+            if (processDecision.HasValue) {
+                if (processDecision.Value)
+                    DisableTelemetryForCurrentProcess();
+
+                return processDecision.Value;
+            }
+
+            if (!TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread())
+                return false;
+
+            DisableTelemetryForCurrentProcess();
+            return true;
         }
     }
 }
