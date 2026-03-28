@@ -133,9 +133,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         }
 
         private static void ResetProcessDisabledForTests() {
-            var field = typeof(TelemetryConfig).GetField("processDisabled",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            field?.SetValue(null, 0);
+            TelemetryConfig.ResetProcessDisabledForTests();
         }
 
         private static void TryDeleteDirectory(string dir) {

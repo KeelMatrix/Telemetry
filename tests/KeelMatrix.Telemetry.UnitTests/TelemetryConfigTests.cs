@@ -311,6 +311,65 @@ public sealed class TelemetryConfigTests : IDisposable {
     }
 
     [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_MemoizesNegativeRepositoryDecisionForProcessLifetime() {
+        using var _ = CreateEnvironmentSnapshot();
+
+        ClearOptOutVars();
+
+        int calls = 0;
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            Interlocked.Increment(ref calls);
+            return false;
+        });
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+
+        calls.Should().Be(1);
+        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_MemoizesPositiveRepositoryDecisionAndPromotesProcessDisable() {
+        using var _ = CreateEnvironmentSnapshot();
+
+        ClearOptOutVars();
+
+        int calls = 0;
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            Interlocked.Increment(ref calls);
+            return true;
+        });
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+
+        calls.Should().Be(1);
+        TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResetProcessDisabledForTests_ClearsMemoizedRepositoryDecision() {
+        using var _ = CreateEnvironmentSnapshot();
+
+        ClearOptOutVars();
+
+        int calls = 0;
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            Interlocked.Increment(ref calls);
+            return false;
+        });
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+        calls.Should().Be(1);
+
+        TelemetryConfig.ResetProcessDisabledForTests();
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+        calls.Should().Be(2);
+    }
+
+    [Fact]
     public void ClientConstruction_DoesNotResolveRepositoryOptOutOnCallerThread() {
         using var _ = CreateEnvironmentSnapshot();
         using var signal = new ManualResetEventSlim(false);

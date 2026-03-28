@@ -63,6 +63,9 @@ namespace KeelMatrix.Telemetry {
         internal static readonly TimeSpan ProcessingStaleThreshold = TimeSpan.FromMinutes(5);
         internal const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
         private static int processDisabled; // 0/1
+        private static readonly object repositoryDisableDecisionLock = new();
+        // Process-execution memoization for worker-thread repo-local disable discovery.
+        private static int repositoryDisableDecision = -1; // -1 unresolved, 0 enabled, 1 disabled
 
         internal static string ResolveRootDirectory(string toolNameUpper) {
             var safeToolName = SanitizeToolNameForPath(toolNameUpper);
@@ -161,6 +164,7 @@ namespace KeelMatrix.Telemetry {
 
         internal static void ResetProcessDisabledForTests() {
             Interlocked.Exchange(ref processDisabled, 0);
+            Volatile.Write(ref repositoryDisableDecision, -1);
         }
 
         /// <summary>
@@ -191,7 +195,24 @@ namespace KeelMatrix.Telemetry {
                 return processDecision.Value;
             }
 
-            if (!TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread())
+            var repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
+            if (repositoryDecision == 1) {
+                DisableTelemetryForCurrentProcess();
+                return true;
+            }
+
+            if (repositoryDecision == 0)
+                return false;
+
+            lock (repositoryDisableDecisionLock) {
+                repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
+                if (repositoryDecision == -1) {
+                    repositoryDecision = TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread() ? 1 : 0;
+                    Volatile.Write(ref repositoryDisableDecision, repositoryDecision);
+                }
+            }
+
+            if (repositoryDecision == 0)
                 return false;
 
             DisableTelemetryForCurrentProcess();

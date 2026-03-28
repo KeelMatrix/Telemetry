@@ -239,9 +239,7 @@ public sealed class ClientIsolationIntegrationTests {
         }
 
         private static void ResetProcessDisabledForTests() {
-            var field = typeof(TelemetryConfig).GetField("processDisabled", BindingFlags.NonPublic | BindingFlags.Static);
-            field.Should().NotBeNull();
-            field!.SetValue(null, 0);
+            TelemetryConfig.ResetProcessDisabledForTests();
         }
     }
 
