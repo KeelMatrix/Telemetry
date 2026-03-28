@@ -364,9 +364,27 @@ public sealed class TelemetryConfigTests : IDisposable {
         calls.Should().Be(1);
 
         TelemetryConfig.ResetProcessDisabledForTests();
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            Interlocked.Increment(ref calls);
+            return false;
+        });
 
         TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
         calls.Should().Be(2);
+    }
+
+    [Fact]
+    public void ResetProcessDisabledForTests_ClearsRepositoryDisableOverride() {
+        using var _ = CreateEnvironmentSnapshot();
+
+        ClearOptOutVars();
+
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => true);
+
+        TelemetryConfig.ResetProcessDisabledForTests();
+
+        TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+        TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
     }
 
     [Fact]
@@ -386,10 +404,15 @@ public sealed class TelemetryConfigTests : IDisposable {
         });
 
         var client = new Client("UNITTEST_" + Guid.NewGuid().ToString("N"), typeof(TelemetryConfigTests));
-        client.TrackActivation();
+        try {
+            client.TrackActivation();
 
-        signal.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
-        observedThreadId.Should().NotBe(callerThreadId);
+            signal.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            observedThreadId.Should().NotBe(callerThreadId);
+        }
+        finally {
+            DisposeClientWorker(client);
+        }
     }
 
     [Fact]
@@ -554,6 +577,22 @@ public sealed class TelemetryConfigTests : IDisposable {
         try {
             if (Directory.Exists(path))
                 Directory.Delete(path, recursive: true);
+        }
+        catch {
+            // swallow
+        }
+    }
+
+    private static void DisposeClientWorker(Client client) {
+        try {
+            var innerField = typeof(Client).GetField("client", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var inner = innerField?.GetValue(client);
+            if (inner is not TelemetryClient telemetryClient)
+                return;
+
+            var workerField = typeof(TelemetryClient).GetField("worker", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            var worker = workerField?.GetValue(telemetryClient) as IDisposable;
+            worker?.Dispose();
         }
         catch {
             // swallow

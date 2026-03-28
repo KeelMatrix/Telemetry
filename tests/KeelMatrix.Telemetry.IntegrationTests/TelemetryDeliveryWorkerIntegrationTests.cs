@@ -57,7 +57,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         var repoRoot = CreateGitRepoRoot("worker-repo-local-opt-out", "https://github.com/KeelMatrix/Telemetry.git");
         var startingPoint = Path.Combine(repoRoot, "src", "tool");
         Directory.CreateDirectory(startingPoint);
-        File.WriteAllText(Path.Combine(repoRoot, ".env.local"), "KEELMATRIX_NO_TELEMETRY=1");
+        await File.WriteAllTextAsync(Path.Combine(repoRoot, ".env.local"), "KEELMATRIX_NO_TELEMETRY=1");
 
         using var overrideScope = new StartingPointsOverrideScope(startingPoint);
         using var harness = new WorkerHarness();

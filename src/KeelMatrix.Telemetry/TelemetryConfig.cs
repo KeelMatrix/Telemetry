@@ -165,6 +165,7 @@ namespace KeelMatrix.Telemetry {
         internal static void ResetProcessDisabledForTests() {
             Interlocked.Exchange(ref processDisabled, 0);
             Volatile.Write(ref repositoryDisableDecision, -1);
+            TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
         }
 
         /// <summary>

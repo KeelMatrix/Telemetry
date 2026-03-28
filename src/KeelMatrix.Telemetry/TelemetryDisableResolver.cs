@@ -1,6 +1,7 @@
 // Copyright (c) KeelMatrix
 
 using System.Text.Json;
+using System.Linq;
 using GitDiscovery = KeelMatrix.Telemetry.ProjectIdentity.GitDiscovery;
 
 namespace KeelMatrix.Telemetry {
@@ -185,11 +186,12 @@ namespace KeelMatrix.Telemetry {
         }
 
         private static bool TryGetPropertyCaseInsensitive(JsonElement element, string name, out JsonElement value) {
-            foreach (var property in element.EnumerateObject()) {
-                if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) {
-                    value = property.Value;
-                    return true;
-                }
+            var property = element.EnumerateObject()
+                .FirstOrDefault(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+            if (!property.Equals(default(JsonProperty))) {
+                value = property.Value;
+                return true;
             }
 
             value = default;
@@ -220,12 +222,7 @@ namespace KeelMatrix.Telemetry {
         }
 
         private static bool IsRecognizedOptOutKey(string key) {
-            foreach (var variableName in OptOutVariableNames) {
-                if (key.Equals(variableName, StringComparison.Ordinal))
-                    return true;
-            }
-
-            return false;
+            return OptOutVariableNames.Any(variableName => key.Equals(variableName, StringComparison.Ordinal));
         }
 
         private static bool IsTruthyValue(string? value) {
