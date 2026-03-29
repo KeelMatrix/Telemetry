@@ -63,6 +63,11 @@ namespace KeelMatrix.Telemetry {
         internal static readonly TimeSpan ProcessingStaleThreshold = TimeSpan.FromMinutes(5);
         internal const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
         private static int processDisabled; // 0/1
+        private static readonly object repositoryDisableDecisionLock = new();
+        // Process-execution memoization for worker-thread repo-local disable discovery,
+        // scoped to the current resolved repository root set.
+        private static string? repositoryDisableDecisionKey;
+        private static int repositoryDisableDecision = -1; // -1 unresolved, 0 enabled, 1 disabled
 
         internal static string ResolveRootDirectory(string toolNameUpper) {
             var safeToolName = SanitizeToolNameForPath(toolNameUpper);
@@ -161,49 +166,78 @@ namespace KeelMatrix.Telemetry {
 
         internal static void ResetProcessDisabledForTests() {
             Interlocked.Exchange(ref processDisabled, 0);
+            Volatile.Write(ref repositoryDisableDecision, -1);
+            Volatile.Write(ref repositoryDisableDecisionKey, null);
+            TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
         }
 
         /// <summary>
-        /// Determines whether telemetry is disabled for the current process, either explicitly
-        /// or through environment-based opt-out signals.
+        /// Determines whether telemetry is disabled for the current process through process-local
+        /// or process-environment opt-out signals.
         /// </summary>
         internal static bool IsTelemetryDisabled() {
             // Process-local hard disable
             if (Volatile.Read(ref processDisabled) == 1)
                 return true;
 
-            // KeelMatrix opt-out
-            if (IsOptOutSet("KEELMATRIX_NO_TELEMETRY"))
-                return true;
-
-            // Ecosystem-standard opt-outs
-            if (IsOptOutSet("DOTNET_CLI_TELEMETRY_OPTOUT"))
-                return true;
-
-            if (IsOptOutSet("DO_NOT_TRACK"))
-                return true;
-
-            return false;
+            return TelemetryDisableResolver.IsProcessTelemetryDisabled();
         }
 
-        private static bool IsOptOutSet(string variableName) {
-            try {
-                var value = Environment.GetEnvironmentVariable(variableName);
-                if (string.IsNullOrWhiteSpace(value))
-                    return false;
+        /// <summary>
+        /// Resolves repo-local opt-out on the worker thread and promotes it to a process-local disable.
+        /// Caller-thread paths must not invoke repo-local discovery because it may perform filesystem I/O.
+        /// </summary>
+        internal static bool ResolveRepositoryTelemetryDisableOnWorkerThread() {
+            if (Volatile.Read(ref processDisabled) == 1)
+                return true;
 
-                value = value.Trim();
+            var processDecision = TelemetryDisableResolver.GetProcessTelemetryDisableDecision();
+            if (processDecision.HasValue) {
+                if (processDecision.Value)
+                    DisableTelemetryForCurrentProcess();
 
-                // Accept common truthy spellings used by tooling and CI environments.
-                return value == "1"
-                    || value.Equals("true", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("yes", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("y", StringComparison.OrdinalIgnoreCase)
-                    || value.Equals("on", StringComparison.OrdinalIgnoreCase);
+                return processDecision.Value;
             }
-            catch {
+
+            var repositoryRoots = TelemetryDisableResolver.GetCandidateRepositoryRoots();
+            var repositoryDecisionKey = CreateRepositoryDisableDecisionKey(repositoryRoots);
+            var cachedRepositoryDecisionKey = Volatile.Read(ref repositoryDisableDecisionKey);
+            var repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
+            if (repositoryDecision == 1 && string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal)) {
+                DisableTelemetryForCurrentProcess();
+                return true;
+            }
+
+            if (repositoryDecision == 0 && string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal))
                 return false;
+
+            lock (repositoryDisableDecisionLock) {
+                cachedRepositoryDecisionKey = Volatile.Read(ref repositoryDisableDecisionKey);
+                repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
+                if (repositoryDecision == -1 || !string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal)) {
+                    repositoryDecision = TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread(repositoryRoots) ? 1 : 0;
+                    Volatile.Write(ref repositoryDisableDecisionKey, repositoryDecisionKey);
+                    Volatile.Write(ref repositoryDisableDecision, repositoryDecision);
+                }
             }
+
+            if (repositoryDecision == 0)
+                return false;
+
+            DisableTelemetryForCurrentProcess();
+            return true;
+        }
+
+        private static string CreateRepositoryDisableDecisionKey(IReadOnlyList<string> repositoryRoots) {
+            if (repositoryRoots.Count == 0)
+                return string.Empty;
+
+            var comparer = Path.DirectorySeparatorChar == '\\'
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+            var normalizedRoots = repositoryRoots.ToArray();
+            Array.Sort(normalizedRoots, comparer);
+            return string.Join("\n", normalizedRoots);
         }
     }
 }

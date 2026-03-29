@@ -1,145 +1,96 @@
 # KeelMatrix.Telemetry
 
-KeelMatrix.Telemetry is a minimal, privacy-focused telemetry library for .NET libraries and tools.
+KeelMatrix.Telemetry is a small .NET package for anonymous activation and usage telemetry.
 
-It is designed for library authors who want lightweight, anonymous activation and usage signals without collecting user data, blocking application code, or introducing external dependencies.
+It is designed for libraries and developer tools that want a minimal built-in signal without turning telemetry into a product of its own. This package is a shared internal dependency used transitively by KeelMatrix libraries. It is open source for transparency, inspection, and auditing, but it is not intended to be installed or used directly as a standalone package.
 
-Telemetry is opt-out, best-effort, and non-blocking.
+The model is intentionally narrow:
 
----
+- one anonymous **activation** event per project identity
+- one anonymous **heartbeat** event per project identity per ISO week
+- local durable queueing for best-effort delivery
+- explicit opt-out support
+- no blocking I/O on the calling thread
 
-## Purpose
+This is **not** a general-purpose analytics SDK. It is a small telemetry building block with a very small API surface.
 
-This package provides:
-
-- Anonymous **activation** tracking (once per project identity)
-- Anonymous **weekly heartbeat** tracking (once per project identity per ISO week)
-- Local durable queueing with retry
-- Strictly minimal payloads
-- Explicit opt-out via environment variables
-
-It is intended to be used transitively by higher-level KeelMatrix libraries.
-
----
-
-## Installation
-
-Add the NuGet package to your library project:
+## Install
 
 ```bash
 dotnet add package KeelMatrix.Telemetry
 ```
 
----
-
-## Quickstart
-
-Example usage inside your library:
+## Quick start
 
 ```csharp
-var client = new KeelMatrix.Telemetry.Client("YourToolName", typeof(YourCallingClass));
+using KeelMatrix.Telemetry;
 
-// Fire-and-forget (non-blocking)
+var client = new Client("yourtool", typeof(YourEntryPointType));
+
 client.TrackActivation();
 client.TrackHeartbeat();
 ```
 
-Design guarantees:
+## Design guarantees
 
-- No blocking I/O on the calling thread
+- Best-effort and non-blocking from normal call sites
 - Failures are swallowed
-- Telemetry must never affect application behavior
+- Telemetry must not affect application behavior
+- Minimal payloads only
+- Public API kept intentionally small
 
----
+## What gets sent
 
-## Telemetry Model
+At most two event types are sent:
 
-Two event types are emitted:
+1. **Activation**
+2. **Heartbeat**
 
-1. Activation (once per project identity)
-2. Heartbeat (once per project identity per ISO week)
+Payloads include tool metadata plus anonymous project and installation identifiers. They do **not** include source code, SQL text, file contents, file paths, usernames, hostnames, or client-side IP addresses.
 
-All events include only these base fields:
+For exact fields, storage details, retention, and opt-out behavior, see [PRIVACY.md](./PRIVACY.md).
 
-- event
-- tool
-- tool_version
-- telemetry_version
-- schema_version
-- project_hash (consuming codebase identity; anonymous and non-reversible)
-- installation_hash (installation identity; anonymous and non-reversible)
+## Opt out
 
-Activation also includes:
+Telemetry can be disabled by configuration.
 
-- runtime
-- os
-- ci flag
-- timestamp
+For the current process:
 
-Heartbeat also includes:
+### PowerShell
 
-- week
+```powershell
+$env:KEELMATRIX_NO_TELEMETRY="1"
+```
 
-No user content, source code, SQL, file paths, usernames, hostnames, or IP addresses are collected.
+### Bash
 
----
+```bash
+export KEELMATRIX_NO_TELEMETRY=1
+```
 
-## Telemetry (Opt-Out)
+Repo-local opt-out is also supported through `keelmatrix.telemetry.json`, `.env.local`, or `.env`.
 
-Telemetry is disabled when **any** of the following environment variables is set to a truthy value:
+See [PRIVACY.md](./PRIVACY.md) for precedence rules, supported keys, and behavior details.
 
-- KEELMATRIX_NO_TELEMETRY
-- DOTNET_CLI_TELEMETRY_OPTOUT
-- DO_NOT_TRACK
+## Intended use
 
-Accepted truthy values (case-insensitive where applicable):
+KeelMatrix.Telemetry works best when you want all of the following:
 
-- 1
-- true
-- yes
-- y
-- on
+- a tiny integration surface
+- anonymous coarse-grained usage signals
+- no caller-thread file or network I/O
+- a simple privacy story you can explain in a few minutes
 
-If disabled, NullTelemetryClient is used and no events are sent, including any locally queued backlog.
+If you need dashboards, funnels, user profiles, feature flags, or arbitrary event streams, use a different telemetry system.
 
----
+## Repository notes
 
-## Local Storage
+- Target frameworks: `net8.0` and `netstandard2.0`
+- SourceLink and symbols are enabled
+- Public API analyzers are used to keep the surface stable
 
-To ensure reliability and non-blocking behavior, the library uses local filesystem storage under a per-user telemetry root directory:
+## Help and security
 
-- `telemetry.queue/`
-  - `pending/`
-  - `processing/`
-  - `dead/`
-- `markers/` (idempotency for activation and weekly heartbeat)
-- `telemetry.salt` (persisted salt used only to derive installation identity)
-
-These files contain only minimal telemetry metadata and never include user content.
-
----
-
-## Network Endpoint
-
-Telemetry is sent over HTTPS to:
-
-https://telemetry.keelmatrix.com
-
-Transmission is best-effort. Failures do not propagate to callers.
-
----
-
-## Data Retention
-
-Telemetry data is retained server-side for **90 days** and then automatically deleted.
-
----
-
-## Security & Privacy
-
-- Minimal, anonymous payloads
-- No personal data collection
-- Explicit opt-out
-- Non-blocking design
-
-For full privacy details, see [PRIVACY.md](./PRIVACY.md).
+- Privacy details: [PRIVACY.md](./PRIVACY.md)
+- Security reporting: [SECURITY.md](./SECURITY.md)
+- Contributing: [CONTRIBUTING.md](./CONTRIBUTING.md)

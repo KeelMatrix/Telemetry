@@ -37,8 +37,9 @@ public sealed class ClientEndToEndIntegrationTests {
         ClearOptOutVars();
 
         using var runtime = IsolatedRuntime.Create();
+        using var clientScope = new ClientScope(runtime.ToolNameUpper);
 
-        var client = new Client(runtime.ToolNameUpper, typeof(ClientEndToEndIntegrationTests));
+        var client = clientScope.Client;
 
         Action act = () => {
             client.TrackActivation();
@@ -54,8 +55,9 @@ public sealed class ClientEndToEndIntegrationTests {
         ClearOptOutVars();
 
         using var runtime = IsolatedRuntime.Create();
+        using var clientScope = new ClientScope(runtime.ToolNameUpper);
 
-        var client = new Client(runtime.ToolNameUpper, typeof(ClientEndToEndIntegrationTests));
+        var client = clientScope.Client;
 
         Action act = () => {
             client.TrackHeartbeat();
@@ -117,6 +119,20 @@ public sealed class ClientEndToEndIntegrationTests {
             }
 
             TestCleanup.RegisterToolForFinalCleanup(ToolNameUpper, typeof(ClientEndToEndIntegrationTests), RootDir);
+        }
+    }
+
+    private sealed class ClientScope : IDisposable {
+        public ClientScope(string toolNameUpper) {
+            ToolNameUpper = toolNameUpper;
+            Client = new Client(toolNameUpper, typeof(ClientEndToEndIntegrationTests));
+        }
+
+        public string ToolNameUpper { get; }
+        public Client Client { get; }
+
+        public void Dispose() {
+            TestCleanup.DisposeCachedWorkerForTool(ToolNameUpper, typeof(ClientEndToEndIntegrationTests));
         }
     }
 }

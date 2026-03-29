@@ -1,31 +1,77 @@
 # Privacy Policy
 
-This repository contains **KeelMatrix.Telemetry**, a minimal, privacy-preserving telemetry library for .NET libraries and tools.
-
-Telemetry is **opt-out**. When enabled, it is designed to be **best-effort and non-blocking**: calls from your application must never do I/O or block the calling thread, and failures are swallowed.
-
----
+This document describes the telemetry behavior of **KeelMatrix.Telemetry**.
 
 ## Summary
 
-Telemetry may emit at most two event types:
+KeelMatrix.Telemetry sends at most two anonymous event types:
 
-1. **Activation** — at most once per project identity.
-2. **Heartbeat** — at most once per project identity per ISO week.
+1. **Activation** — at most once per project identity
+2. **Heartbeat** — at most once per project identity per ISO week
 
-Telemetry does **not** collect user content, SQL, file contents, file paths, machine names, usernames, or IP addresses.
+Telemetry is **opt-out**.
 
----
+The package is designed to be best-effort and non-blocking from normal call sites. Telemetry failures are swallowed and must not affect application behavior.
 
-## How to disable telemetry (opt-out)
+## What telemetry is for
 
-Telemetry is disabled when **any** of the following environment variables is set to a truthy value:
+Telemetry is used to measure coarse-grained package usage: whether a tool or library was activated, and whether it was used again in a later week.
 
-- `KEELMATRIX_NO_TELEMETRY`
-- `DOTNET_CLI_TELEMETRY_OPTOUT`
-- `DO_NOT_TRACK`
+It is not used for content inspection, behavioral profiling, advertising, or cross-product user tracking.
 
-Accepted truthy values (case-insensitive where applicable):
+## What is sent
+
+Every payload is a small JSON document.
+
+Common fields:
+
+- `event` — `activation` or `heartbeat`
+- `tool` — tool or package identifier provided by the caller
+- `tool_version` — version of the calling assembly
+- `telemetry_version` — version of KeelMatrix.Telemetry
+- `schema_version` — currently `1`
+- `project_hash` — stable anonymous consuming-codebase identifier
+- `installation_hash` — stable anonymous installation identifier
+
+Activation also includes:
+
+- `runtime`
+- `os`
+- `ci`
+- `timestamp`
+
+Heartbeat also includes:
+
+- `week`
+
+## What is not sent
+
+KeelMatrix.Telemetry does **not** send:
+
+- source code
+- SQL text or queries
+- file paths
+- file contents
+- usernames
+- hostnames
+- machine identifiers or MAC addresses
+- client-side IP addresses
+- arbitrary custom events
+
+The identifiers used by the package are anonymous hashes, not raw user or machine identifiers.
+
+## Opt-out
+
+Telemetry is disabled when the highest-precedence configured source says so.
+
+Precedence:
+
+1. Process environment variables
+2. `keelmatrix.telemetry.json`
+3. `.env.local`
+4. `.env`
+
+Accepted truthy values:
 
 - `1`
 - `true`
@@ -33,61 +79,75 @@ Accepted truthy values (case-insensitive where applicable):
 - `y`
 - `on`
 
+Supported environment variable keys:
+
+- `KEELMATRIX_NO_TELEMETRY`
+- `DOTNET_CLI_TELEMETRY_OPTOUT`
+- `DO_NOT_TRACK`
+
+### Disable for the current process
+
+PowerShell:
+
+```powershell
+$env:KEELMATRIX_NO_TELEMETRY="1"
+```
+
+Bash:
+
+```bash
+export KEELMATRIX_NO_TELEMETRY=1
+```
+
+Process-level opt-out is checked during client construction.
+
+### Disable for the current repository
+
+You can disable telemetry for a repository with any of the following files:
+
+`keelmatrix.telemetry.json`
+
+```json
+{
+  "disabled": true
+}
+```
+
+`.env.local`
+
+```dotenv
+KEELMATRIX_NO_TELEMETRY=1
+```
+
+`.env`
+
+```dotenv
+KEELMATRIX_NO_TELEMETRY=1
+```
+
 Notes:
-- If telemetry is disabled, the library does not send any events, including any locally queued backlog.
-- If you need a hard disable for a single process, do it at your host/library level (e.g., avoid constructing/using your telemetry client).
 
----
+- `.env` and `.env.local` support simple `KEY=VALUE` lines
+- an optional case-insensitive `export ` prefix is supported
+- when a Git root exists, it is preferred over higher nested non-Git repo markers such as `global.json` or `Directory.Build.props`
+- repo-local file lookup is resolved on the worker thread, not on the caller thread
 
-## What is sent
+If telemetry is disabled, the package does not send events, including any locally queued backlog.
 
-All payloads are small JSON documents and include only:
+## Local storage
 
-Common fields (all events):
-- `event` — `"activation"` or `"heartbeat"`
-- `tool` — the calling library/tool identifier (a lowercase name provided by the caller)
-- `tool_version` — the calling library/tool version
-- `telemetry_version` — the KeelMatrix.Telemetry version
-- `schema_version` — currently `1`
-- `project_hash` — consuming codebase identity (stable, anonymous, not reversible)
-- `installation_hash` — installation identity (stable, anonymous, not reversible)
+To support best-effort delivery and crash recovery, the package uses local per-user storage under a telemetry root directory.
 
-Activation-only:
-- `runtime` — runtime identifier (e.g., ".NET 8.0" normalized)
-- `os` — `"windows"`, `"linux"`, `"osx"`, or `"unknown"`
-- `ci` — boolean indicating whether a CI environment is detected
-- `timestamp` — UTC timestamp
+It may create:
 
-Heartbeat-only:
-- `week` — ISO week string (e.g., `2026-W09`)
-
----
-
-## What is NOT sent
-
-The library is intentionally limited. It does not send:
-
-- Source code, SQL text, queries, or user content
-- File paths, file contents, or directory listings
-- Hostnames, usernames, machine identifiers, or MAC addresses
-- IP addresses (client-side) or any attempt to fingerprint users
-
----
-
-## Local storage on your machine
-
-To be crash-safe and non-blocking, the library uses local filesystem storage under a per-user telemetry root directory:
-
-- A durable queue directory: `telemetry.queue/` with subfolders:
+- `telemetry.queue/`
   - `pending/`
   - `processing/`
-  - `dead/` (dead-letter)
-- Marker files directory: `markers/` used for idempotency (activation/weekly heartbeat)
-- A persisted salt file: `telemetry.salt` used only to derive installation identity
+  - `dead/`
+- `markers/`
+- `telemetry.salt`
 
-These files contain only minimal telemetry queue/marker data and do not include user content.
-
----
+These files contain only minimal queue, marker, and identity data required for delivery and idempotency. They do not contain user content.
 
 ## Network endpoint
 
@@ -95,22 +155,16 @@ Telemetry is sent over HTTPS to:
 
 `https://telemetry.keelmatrix.com`
 
-Payloads are size-limited and transmission failures are swallowed; telemetry must never affect your application behavior.
-
----
+Payloads are size-limited. Transmission is best-effort.
 
 ## Server-side retention
 
-Telemetry data is retained for **90 days** and then **automatically deleted**.
+Telemetry data is retained server-side for **90 days** and then automatically deleted.
 
----
+## Changes to this document
 
-## Changes to this policy
-
-If telemetry behavior changes in a way that affects privacy, this document will be updated in the repository.
-
----
+If telemetry behavior changes in a way that materially affects privacy, this file will be updated.
 
 ## Contact
 
-Questions or concerns: open a GitHub issue in this repository.
+For questions or concerns, open an issue in the repository.

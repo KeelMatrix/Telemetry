@@ -12,7 +12,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly RuntimeInfo runtimeInfo;
         private readonly IProjectIdentityProvider projectIdentityProvider;
-        private readonly ITelemetryQueue queue;
+        private ITelemetryQueue? queue;
         private readonly ITelemetrySender httpSender;
 
         private readonly SemaphoreSlim signal = new(0, int.MaxValue);
@@ -60,7 +60,6 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             this.runtimeInfo = runtimeInfo;
             this.projectIdentityProvider = projectIdentityProvider ?? throw new ArgumentNullException(nameof(projectIdentityProvider));
             httpSender = telemetrySender ?? throw new ArgumentNullException(nameof(telemetrySender));
-            queue = DurableTelemetryQueue.CreateSafe(runtimeContext);
 
             _workerTask = Task.Run(RunAsync);
 
@@ -115,14 +114,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     break;
                 }
 
-                if (!TelemetryConfig.IsTelemetryDisabled()) {
-                    try {
-                        runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
-                    }
-                    catch {
-                        // swallow
-                    }
+                if (TelemetryConfig.IsTelemetryDisabled() || TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread()) {
+                    Interlocked.Exchange(ref hasPendingWork, 0);
+                    ResetBackoff();
+                    continue;
                 }
+
+                try {
+                    runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
+                }
+                catch {
+                    // swallow
+                }
+
+                var telemetryQueue = GetQueueOnWorkerThread();
 
                 // Resolve telemetry identities once on the worker thread (best-effort).
                 if (!identitiesResolved && !TelemetryConfig.IsTelemetryDisabled()) {
@@ -139,7 +144,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
                 // Plan & enqueue new telemetry based on requests (marker I/O happens here, not on caller)
                 try {
-                    ProcessRequestsOnWorkerThread();
+                    ProcessRequestsOnWorkerThread(telemetryQueue);
                 }
                 catch {
                     // swallow; telemetry must never impact host
@@ -159,20 +164,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     bool anyFailed = false;
 
                     try {
-                        foreach (var item in queue.TryClaim(4)) {
+                        foreach (var item in telemetryQueue.TryClaim(4)) {
                             anyAttempted = true;
 
                             try {
                                 if (await httpSender.TrySendAsync(item.Envelope.PayloadJson, token).ConfigureAwait(false)) {
-                                    queue.Complete(item);
+                                    telemetryQueue.Complete(item);
                                 }
                                 else {
-                                    queue.Abandon(item);
+                                    telemetryQueue.Abandon(item);
                                     anyFailed = true;
                                 }
                             }
                             catch {
-                                queue.Abandon(item);
+                                telemetryQueue.Abandon(item);
                                 anyFailed = true;
                             }
                         }
@@ -200,7 +205,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// Performs all I/O needed to decide whether to emit activation/heartbeat,
         /// serializes events, enqueues them durably, then commits marker files.
         /// </summary>
-        private void ProcessRequestsOnWorkerThread() {
+        private void ProcessRequestsOnWorkerThread(ITelemetryQueue telemetryQueue) {
             if (TelemetryConfig.IsTelemetryDisabled())
                 return;
 
@@ -244,7 +249,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
                         if (json != null) {
                             // Durable queue write + marker commit are I/O; safe here.
-                            queue.Enqueue(json);
+                            telemetryQueue.Enqueue(json);
                             dispatcher.CommitActivation();
                             activationSentThisRun = true;
 
@@ -268,7 +273,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     if (evt != null) {
                         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
                         if (json != null) {
-                            queue.Enqueue(json);
+                            telemetryQueue.Enqueue(json);
                             dispatcher.CommitHeartbeat(evt.Week);
                             Interlocked.Exchange(ref hasPendingWork, 1);
                         }
@@ -283,6 +288,11 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             if (Volatile.Read(ref hasPendingWork) == 1) {
                 Signal();
             }
+        }
+
+        private ITelemetryQueue GetQueueOnWorkerThread() {
+            queue ??= DurableTelemetryQueue.CreateSafe(runtimeContext);
+            return queue;
         }
 
         private async Task ApplyBackoff(CancellationToken token) {

@@ -53,6 +53,49 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     }
 
     [Fact]
+    public async Task RepoLocalOptOutResolvedOnWorkerThread_DoesNotCreateQueueMarkersOrSends() {
+        var repoRoot = CreateGitRepoRoot("worker-repo-local-opt-out", "https://github.com/KeelMatrix/Telemetry.git");
+        var startingPoint = Path.Combine(repoRoot, "src", "tool");
+        Directory.CreateDirectory(startingPoint);
+        await File.WriteAllTextAsync(Path.Combine(repoRoot, ".env.local"), "KEELMATRIX_NO_TELEMETRY=1");
+
+        using var overrideScope = new StartingPointsOverrideScope(startingPoint);
+        using var harness = new WorkerHarness();
+        using var worker = harness.CreateWorker();
+
+        worker.RequestActivation();
+        await Task.Delay(300);
+
+        harness.Sender.Received.Should().BeEmpty();
+        Directory.Exists(harness.PendingDir).Should().BeFalse();
+        Directory.Exists(harness.ProcessingDir).Should().BeFalse();
+        Directory.Exists(harness.MarkersDir).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RepoLocalOptOutResolution_IsMemoizedAcrossWorkerWakes() {
+        using var harness = new WorkerHarness();
+        int calls = 0;
+
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            Interlocked.Increment(ref calls);
+            return false;
+        });
+
+        using var worker = harness.CreateWorker();
+
+        await WaitUntilAsync(() => Volatile.Read(ref calls) == 1, TimeSpan.FromSeconds(5));
+
+        worker.RequestActivation();
+        worker.RequestHeartbeat();
+        worker.RequestActivation();
+
+        await Task.Delay(300);
+
+        calls.Should().Be(1);
+    }
+
+    [Fact]
     public async Task ActivationPlanning_EnqueuesEventAndCommitsActivationMarker() {
         using var harness = new WorkerHarness();
         using var worker = harness.CreateWorker();
@@ -260,6 +303,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
             env.Clear();
             ResetProcessDisabledForTests();
+            TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
 
             Sender = new RecordingTelemetrySender();
 
@@ -299,12 +343,13 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         public void Dispose() {
             Sender.Dispose();
             env.Dispose();
+            TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
+            GitDiscovery.SetStartingPointsOverrideForTests(null);
             // Cleanup is deferred to the end of the integration test process.
         }
 
         private static void ResetProcessDisabledForTests() {
-            var field = typeof(TelemetryConfig).GetField("processDisabled", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            field?.SetValue(null, 0);
+            TelemetryConfig.ResetProcessDisabledForTests();
         }
 
         private static int CountFiles(string dir, string pattern) {
