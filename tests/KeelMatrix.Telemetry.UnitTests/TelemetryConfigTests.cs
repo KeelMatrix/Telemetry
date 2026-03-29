@@ -311,8 +311,10 @@ public sealed class TelemetryConfigTests : IDisposable {
     }
 
     [Fact]
-    public void ResolveRepositoryTelemetryDisableOnWorkerThread_MemoizesNegativeRepositoryDecisionForProcessLifetime() {
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_MemoizesNegativeRepositoryDecisionForSameRepositoryRootSet() {
         using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
 
@@ -330,8 +332,30 @@ public sealed class TelemetryConfigTests : IDisposable {
     }
 
     [Fact]
+    public void ResolveRepositoryTelemetryDisableOnWorkerThread_ReevaluatesWhenRepositoryRootSetChangesInSameProcess() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repoWithoutOptOut = CreateRepository("src", "tool");
+        using var repoWithOptOut = CreateRepository("tests", "tool");
+
+        ClearOptOutVars();
+        repoWithOptOut.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env.local");
+
+        using (var scope = new StartingPointsOverrideScope(repoWithoutOptOut.StartingPoint)) {
+            TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeFalse();
+            TelemetryConfig.IsTelemetryDisabled().Should().BeFalse();
+        }
+
+        using (var scope = new StartingPointsOverrideScope(repoWithOptOut.StartingPoint)) {
+            TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+            TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
+        }
+    }
+
+    [Fact]
     public void ResolveRepositoryTelemetryDisableOnWorkerThread_MemoizesPositiveRepositoryDecisionAndPromotesProcessDisable() {
         using var _ = CreateEnvironmentSnapshot();
+        using var repo = CreateRepository("src", "tool");
+        using var __ = new StartingPointsOverrideScope(repo.StartingPoint);
 
         ClearOptOutVars();
 

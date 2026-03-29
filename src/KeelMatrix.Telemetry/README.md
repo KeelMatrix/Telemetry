@@ -1,20 +1,48 @@
 # KeelMatrix.Telemetry
 
-`KeelMatrix.Telemetry` is the shared telemetry infrastructure package used by KeelMatrix libraries.
+`KeelMatrix.Telemetry` is the internal telemetry foundation used by KeelMatrix libraries.
 
-It is primarily intended to be consumed transitively through other KeelMatrix packages rather than referenced directly. It is not intended to be a standalone general-purpose telemetry solution.
+It is published as open source for transparency and auditing, but it is not intended to be installed directly in application code. Most users should install the higher-level KeelMatrix package they actually want and let this package flow transitively.
 
-## Intended Use
+## What it provides
 
-- Internal shared dependency for KeelMatrix libraries
-- Privacy-first activation and usage telemetry
-- Best-effort, non-blocking background delivery
+- Minimal anonymous telemetry
+- One-time activation tracking per project identity
+- Weekly heartbeat tracking per project identity
+- Best-effort, non-blocking delivery
+- Explicit opt-out support
+- Small public API surface
 
-## Notes
+## Important
 
-- This package is open source and available for anyone to inspect or use.
-- The public API surface is intentionally small.
-- Most consumers should install the higher-level KeelMatrix package they actually need, not this package directly.
-- For implementation details and privacy notes, see the repository README and `PRIVACY.md`.
+This package is infrastructure, not a standalone end-user product.
 
-Source: https://github.com/KeelMatrix/Telemetry
+If you reached this page from NuGet or an IDE of your choice, you probably want the higher-level KeelMatrix package that depends on this one, not `KeelMatrix.Telemetry` directly.
+
+## Public API
+
+```csharp
+var client = new KeelMatrix.Telemetry.Client("YourToolName", typeof(YourType));
+
+client.TrackActivation();
+client.TrackHeartbeat();
+```
+
+The API is intentionally small because this package exists to support other KeelMatrix packages, not to expose a broad telemetry framework.
+
+## Behavior
+
+- Calls are fire-and-forget
+- Telemetry is designed to avoid blocking the calling thread
+- Failures are swallowed
+- Opt-out is supported through environment variables or repo-local configuration
+
+## Documentation
+
+- Repository: `https://github.com/KeelMatrix/Telemetry`
+- Privacy details: see `PRIVACY.md` in the repository
+- Source and implementation details: see the repository README
+
+## Support
+
+For bugs, questions, or review of telemetry behavior, open an issue in the GitHub repository.

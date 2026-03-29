@@ -1,7 +1,7 @@
 // Copyright (c) KeelMatrix
 
-using System.Text.Json;
 using System.Linq;
+using System.Text.Json;
 using GitDiscovery = KeelMatrix.Telemetry.ProjectIdentity.GitDiscovery;
 
 namespace KeelMatrix.Telemetry {
@@ -32,6 +32,10 @@ namespace KeelMatrix.Telemetry {
         }
 
         internal static bool IsRepositoryTelemetryDisabledOnWorkerThread() {
+            return IsRepositoryTelemetryDisabledOnWorkerThread(GetCandidateRepositoryRoots());
+        }
+
+        internal static bool IsRepositoryTelemetryDisabledOnWorkerThread(IReadOnlyList<string> repositoryRoots) {
             var overrideResolver = Volatile.Read(ref repositoryDisableOverrideForTests);
             if (overrideResolver is not null) {
                 try {
@@ -42,7 +46,7 @@ namespace KeelMatrix.Telemetry {
                 }
             }
 
-            foreach (var repositoryRoot in GetCandidateRepositoryRoots()) {
+            foreach (var repositoryRoot in repositoryRoots) {
                 if (EvaluateRepository(repositoryRoot) == DisableDecision.Disabled)
                     return true;
             }

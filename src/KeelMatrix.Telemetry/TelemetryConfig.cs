@@ -64,7 +64,9 @@ namespace KeelMatrix.Telemetry {
         internal const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
         private static int processDisabled; // 0/1
         private static readonly object repositoryDisableDecisionLock = new();
-        // Process-execution memoization for worker-thread repo-local disable discovery.
+        // Process-execution memoization for worker-thread repo-local disable discovery,
+        // scoped to the current resolved repository root set.
+        private static string? repositoryDisableDecisionKey;
         private static int repositoryDisableDecision = -1; // -1 unresolved, 0 enabled, 1 disabled
 
         internal static string ResolveRootDirectory(string toolNameUpper) {
@@ -165,6 +167,7 @@ namespace KeelMatrix.Telemetry {
         internal static void ResetProcessDisabledForTests() {
             Interlocked.Exchange(ref processDisabled, 0);
             Volatile.Write(ref repositoryDisableDecision, -1);
+            Volatile.Write(ref repositoryDisableDecisionKey, null);
             TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
         }
 
@@ -196,19 +199,24 @@ namespace KeelMatrix.Telemetry {
                 return processDecision.Value;
             }
 
+            var repositoryRoots = TelemetryDisableResolver.GetCandidateRepositoryRoots();
+            var repositoryDecisionKey = CreateRepositoryDisableDecisionKey(repositoryRoots);
+            var cachedRepositoryDecisionKey = Volatile.Read(ref repositoryDisableDecisionKey);
             var repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
-            if (repositoryDecision == 1) {
+            if (repositoryDecision == 1 && string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal)) {
                 DisableTelemetryForCurrentProcess();
                 return true;
             }
 
-            if (repositoryDecision == 0)
+            if (repositoryDecision == 0 && string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal))
                 return false;
 
             lock (repositoryDisableDecisionLock) {
+                cachedRepositoryDecisionKey = Volatile.Read(ref repositoryDisableDecisionKey);
                 repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
-                if (repositoryDecision == -1) {
-                    repositoryDecision = TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread() ? 1 : 0;
+                if (repositoryDecision == -1 || !string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal)) {
+                    repositoryDecision = TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread(repositoryRoots) ? 1 : 0;
+                    Volatile.Write(ref repositoryDisableDecisionKey, repositoryDecisionKey);
                     Volatile.Write(ref repositoryDisableDecision, repositoryDecision);
                 }
             }
@@ -218,6 +226,18 @@ namespace KeelMatrix.Telemetry {
 
             DisableTelemetryForCurrentProcess();
             return true;
+        }
+
+        private static string CreateRepositoryDisableDecisionKey(IReadOnlyList<string> repositoryRoots) {
+            if (repositoryRoots.Count == 0)
+                return string.Empty;
+
+            var comparer = Path.DirectorySeparatorChar == '\\'
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+            var normalizedRoots = repositoryRoots.ToArray();
+            Array.Sort(normalizedRoots, comparer);
+            return string.Join("\n", normalizedRoots);
         }
     }
 }
