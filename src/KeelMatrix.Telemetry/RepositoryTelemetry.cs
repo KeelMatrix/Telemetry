@@ -4,8 +4,13 @@ using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry {
     /// <summary>
-    /// Provides repo-local telemetry inspection helpers for a single repository root.
+    /// Provides a narrow explicit inspection API for repo-local telemetry status in a single repository root.
     /// </summary>
+    /// <remarks>
+    /// This API is intended for consuming tools that need to resolve a repository root and inspect the effective
+    /// telemetry status for that one repository. It does not emit telemetry, but it may synchronously inspect
+    /// repo-local configuration files on the caller thread.
+    /// </remarks>
     public static class RepositoryTelemetry {
         /// <summary>
         /// Resolves the repository root reachable from the provided starting directory.
@@ -18,10 +23,11 @@ namespace KeelMatrix.Telemetry {
         }
 
         /// <summary>
-        /// Evaluates the effective telemetry status for the provided repository root.
+        /// Evaluates the effective telemetry status for the provided repository root using the same precedence
+        /// rules as normal telemetry emission.
         /// </summary>
         /// <param name="repositoryRoot">The repository root to inspect.</param>
-        /// <returns>The effective telemetry status for that repository root.</returns>
+        /// <returns>The raw effective telemetry status for that repository root.</returns>
         public static RepositoryTelemetryStatus GetEffectiveStatus(string repositoryRoot) {
             return TelemetryDisableResolver.GetEffectiveStatus(repositoryRoot);
         }

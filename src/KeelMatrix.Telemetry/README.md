@@ -11,6 +11,7 @@ It is published as open source for transparency and auditing, but it is not inte
 - Weekly heartbeat tracking per project identity
 - Best-effort, non-blocking delivery
 - Explicit opt-out support
+- Narrow repo-status inspection for consuming tools
 - Small public API surface
 
 ## Important
@@ -28,12 +29,21 @@ client.TrackActivation();
 client.TrackHeartbeat();
 ```
 
-The API is intentionally small because this package exists to support other KeelMatrix packages, not to expose a broad telemetry framework.
+For explicit repo-status inspection in a consuming tool:
+
+```csharp
+if (RepositoryTelemetry.TryResolveRepositoryRoot(Environment.CurrentDirectory, out string repoRoot)) {
+    RepositoryTelemetryStatus status = RepositoryTelemetry.GetEffectiveStatus(repoRoot);
+}
+```
+
+The API is intentionally small because this package exists to support other KeelMatrix packages, not to expose a broad telemetry framework. `RepositoryTelemetry` exists for narrow repo-status evaluation in consuming tools, not as a general configuration SDK.
 
 ## Behavior
 
-- Calls are fire-and-forget
-- Telemetry is designed to avoid blocking the calling thread
+- `Client.TrackActivation()` and `Client.TrackHeartbeat()` are fire-and-forget
+- Normal telemetry emission paths avoid caller-thread repo-local file and network I/O
+- `RepositoryTelemetry` is an explicit inspection API and may synchronously inspect repo-local config files on the caller thread
 - Failures are swallowed
 - Opt-out is supported through environment variables or repo-local configuration
 

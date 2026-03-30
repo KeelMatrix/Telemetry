@@ -10,7 +10,7 @@ The model is intentionally narrow:
 - one anonymous **heartbeat** event per project identity per ISO week
 - local durable queueing for best-effort delivery
 - explicit opt-out support
-- no blocking I/O on the calling thread
+- explicit repo-status inspection for consuming tools
 
 This is **not** a general-purpose analytics SDK. It is a small telemetry building block with a very small API surface.
 
@@ -31,9 +31,20 @@ client.TrackActivation();
 client.TrackHeartbeat();
 ```
 
+For explicit repo-status inspection in a consuming tool:
+
+```csharp
+using KeelMatrix.Telemetry;
+
+if (RepositoryTelemetry.TryResolveRepositoryRoot(Environment.CurrentDirectory, out string repoRoot)) {
+    RepositoryTelemetryStatus status = RepositoryTelemetry.GetEffectiveStatus(repoRoot);
+}
+```
+
 ## Design guarantees
 
-- Best-effort and non-blocking from normal call sites
+- Normal `Client.TrackActivation()` / `Client.TrackHeartbeat()` paths are best-effort and avoid caller-thread repo-local file and network I/O
+- `RepositoryTelemetry` is an explicit inspection API for consuming tools; it may synchronously inspect repo-local config files on the caller thread
 - Failures are swallowed
 - Telemetry must not affect application behavior
 - Minimal payloads only
@@ -78,7 +89,8 @@ KeelMatrix.Telemetry works best when you want all of the following:
 
 - a tiny integration surface
 - anonymous coarse-grained usage signals
-- no caller-thread file or network I/O
+- no caller-thread repo-local file or network I/O on normal emission paths
+- an explicit repo-status inspection API for tooling that intentionally asks for it
 - a simple privacy story you can explain in a few minutes
 
 If you need dashboards, funnels, user profiles, feature flags, or arbitrary event streams, use a different telemetry system.
