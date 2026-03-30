@@ -24,11 +24,30 @@ namespace KeelMatrix.Telemetry {
         }
 
         internal static bool? GetProcessTelemetryDisableDecision() {
-            return EvaluateProcessEnvironment() switch {
-                DisableDecision.Disabled => true,
-                DisableDecision.Enabled => false,
+            return EvaluateProcessEnvironmentDecision() switch {
+                { IsEnabled: false } => true,
+                { IsEnabled: true } => false,
                 _ => null
             };
+        }
+
+        internal static RepositoryTelemetryStatus GetEffectiveStatus(string repositoryRoot) {
+            var normalizedRepositoryRoot = NormalizeRepositoryRoot(repositoryRoot);
+            var processEnvironmentDecision = EvaluateProcessEnvironmentDecision();
+            if (processEnvironmentDecision is not null)
+                return CreateStatus(normalizedRepositoryRoot, processEnvironmentDecision.Value);
+
+            var repositoryDecision = EvaluateRepositoryDecision(normalizedRepositoryRoot);
+            if (repositoryDecision is not null)
+                return CreateStatus(normalizedRepositoryRoot, repositoryDecision.Value);
+
+            return new RepositoryTelemetryStatus(
+                isEnabled: true,
+                winningSourceKind: RepositoryTelemetrySourceKind.None,
+                winningPath: null,
+                winningVariableName: null,
+                scope: RepositoryTelemetryScope.RepoLocalDefault,
+                repoRoot: normalizedRepositoryRoot);
         }
 
         internal static bool IsRepositoryTelemetryDisabledOnWorkerThread() {
@@ -46,10 +65,12 @@ namespace KeelMatrix.Telemetry {
                 }
             }
 
+#pragma warning disable S3267 // Loops should be simplified with "LINQ" expressions
             foreach (var repositoryRoot in repositoryRoots) {
-                if (EvaluateRepository(repositoryRoot) == DisableDecision.Disabled)
+                if (EvaluateRepositoryDecision(repositoryRoot) is { IsEnabled: false })
                     return true;
             }
+#pragma warning restore S3267 // Loops should be simplified with "LINQ" expressions
 
             return false;
         }
@@ -76,8 +97,9 @@ namespace KeelMatrix.Telemetry {
             Volatile.Write(ref repositoryDisableOverrideForTests, resolver);
         }
 
-        private static DisableDecision EvaluateProcessEnvironment() {
+        private static TelemetryDecision? EvaluateProcessEnvironmentDecision() {
             bool anyPresent = false;
+            string? firstPresentVariable = null;
 
             foreach (var variableName in OptOutVariableNames) {
                 string? value;
@@ -92,55 +114,76 @@ namespace KeelMatrix.Telemetry {
                     continue;
 
                 anyPresent = true;
+                firstPresentVariable ??= variableName;
                 if (IsTruthyValue(value))
-                    return DisableDecision.Disabled;
+                    return new TelemetryDecision(
+                        IsEnabled: false,
+                        WinningSourceKind: RepositoryTelemetrySourceKind.ProcessEnvironment,
+                        Scope: RepositoryTelemetryScope.ProcessEnvironment,
+                        WinningPath: null,
+                        WinningVariableName: variableName);
             }
 
-            return anyPresent ? DisableDecision.Enabled : DisableDecision.Unspecified;
+            if (!anyPresent || firstPresentVariable is null)
+                return null;
+
+            return new TelemetryDecision(
+                IsEnabled: true,
+                WinningSourceKind: RepositoryTelemetrySourceKind.ProcessEnvironment,
+                Scope: RepositoryTelemetryScope.ProcessEnvironment,
+                WinningPath: null,
+                WinningVariableName: firstPresentVariable);
         }
 
-        private static DisableDecision EvaluateRepository(string repositoryRoot) {
-            var configDecision = EvaluateRepositoryConfig(Path.Combine(repositoryRoot, RepositoryConfigFileName));
-            if (configDecision != DisableDecision.Unspecified)
-                return configDecision;
+        private static TelemetryDecision? EvaluateRepositoryDecision(string repositoryRoot) {
+            if (string.IsNullOrWhiteSpace(repositoryRoot))
+                return null;
 
-            var dotEnvLocalDecision = EvaluateDotEnvFile(Path.Combine(repositoryRoot, DotEnvLocalFileName));
-            if (dotEnvLocalDecision != DisableDecision.Unspecified)
-                return dotEnvLocalDecision;
-
-            var dotEnvDecision = EvaluateDotEnvFile(Path.Combine(repositoryRoot, DotEnvFileName));
-            if (dotEnvDecision != DisableDecision.Unspecified)
-                return dotEnvDecision;
-
-            return DisableDecision.Unspecified;
+            try {
+                return EvaluateRepositoryConfig(Path.Combine(repositoryRoot, RepositoryConfigFileName))
+                    ?? EvaluateDotEnvFile(
+                        Path.Combine(repositoryRoot, DotEnvLocalFileName),
+                        RepositoryTelemetrySourceKind.DotEnvLocal)
+                    ?? EvaluateDotEnvFile(
+                        Path.Combine(repositoryRoot, DotEnvFileName),
+                        RepositoryTelemetrySourceKind.DotEnv);
+            }
+            catch {
+                return null;
+            }
         }
 
-        private static DisableDecision EvaluateRepositoryConfig(string path) {
+        private static TelemetryDecision? EvaluateRepositoryConfig(string path) {
             if (!TryReadTextFileCapped(path, MaxRepositoryConfigBytes, out var text))
-                return DisableDecision.Unspecified;
+                return null;
 
             try {
                 using var doc = JsonDocument.Parse(text);
                 if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                    return DisableDecision.Unspecified;
+                    return null;
 
                 if (!TryGetPropertyCaseInsensitive(doc.RootElement, "disabled", out var disabledElement))
-                    return DisableDecision.Unspecified;
+                    return null;
 
-                return IsTruthyJsonValue(disabledElement)
-                    ? DisableDecision.Disabled
-                    : DisableDecision.Enabled;
+                bool isDisabled = IsTruthyJsonValue(disabledElement);
+                return new TelemetryDecision(
+                    IsEnabled: !isDisabled,
+                    WinningSourceKind: RepositoryTelemetrySourceKind.RepositoryConfig,
+                    Scope: RepositoryTelemetryScope.RepoLocal,
+                    WinningPath: path,
+                    WinningVariableName: null);
             }
             catch {
-                return DisableDecision.Unspecified;
+                return null;
             }
         }
 
-        private static DisableDecision EvaluateDotEnvFile(string path) {
+        private static TelemetryDecision? EvaluateDotEnvFile(string path, RepositoryTelemetrySourceKind sourceKind) {
             if (!TryReadTextFileCapped(path, MaxRepositoryEnvFileBytes, out var text))
-                return DisableDecision.Unspecified;
+                return null;
 
             bool anyRecognizedAssignment = false;
+            string? firstRecognizedVariable = null;
 
             using var reader = new StringReader(text);
             string? line;
@@ -161,13 +204,49 @@ namespace KeelMatrix.Telemetry {
                     continue;
 
                 anyRecognizedAssignment = true;
+                firstRecognizedVariable ??= key;
 
                 var value = NormalizeDotEnvValue(trimmed.Substring(equalsIndex + 1));
                 if (IsTruthyValue(value))
-                    return DisableDecision.Disabled;
+                    return new TelemetryDecision(
+                        IsEnabled: false,
+                        WinningSourceKind: sourceKind,
+                        Scope: RepositoryTelemetryScope.RepoLocal,
+                        WinningPath: path,
+                        WinningVariableName: key);
             }
 
-            return anyRecognizedAssignment ? DisableDecision.Enabled : DisableDecision.Unspecified;
+            if (!anyRecognizedAssignment || firstRecognizedVariable is null)
+                return null;
+
+            return new TelemetryDecision(
+                IsEnabled: true,
+                WinningSourceKind: sourceKind,
+                Scope: RepositoryTelemetryScope.RepoLocal,
+                WinningPath: path,
+                WinningVariableName: firstRecognizedVariable);
+        }
+
+        private static RepositoryTelemetryStatus CreateStatus(string repositoryRoot, TelemetryDecision decision) {
+            return new RepositoryTelemetryStatus(
+                isEnabled: decision.IsEnabled,
+                winningSourceKind: decision.WinningSourceKind,
+                winningPath: decision.WinningPath,
+                winningVariableName: decision.WinningVariableName,
+                scope: decision.Scope,
+                repoRoot: repositoryRoot);
+        }
+
+        private static string NormalizeRepositoryRoot(string repositoryRoot) {
+            if (string.IsNullOrWhiteSpace(repositoryRoot))
+                return string.Empty;
+
+            try {
+                return Path.GetFullPath(repositoryRoot);
+            }
+            catch {
+                return repositoryRoot;
+            }
         }
 
         private static bool TryReadTextFileCapped(string path, int maxBytes, out string text) {
@@ -242,10 +321,11 @@ namespace KeelMatrix.Telemetry {
                 || value.Equals("on", StringComparison.OrdinalIgnoreCase);
         }
 
-        private enum DisableDecision {
-            Unspecified = 0,
-            Enabled = 1,
-            Disabled = 2
-        }
+        private readonly record struct TelemetryDecision(
+            bool IsEnabled,
+            RepositoryTelemetrySourceKind WinningSourceKind,
+            RepositoryTelemetryScope Scope,
+            string? WinningPath,
+            string? WinningVariableName);
     }
 }

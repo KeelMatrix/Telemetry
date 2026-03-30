@@ -3,3 +3,23 @@ KeelMatrix.Telemetry.Client
 KeelMatrix.Telemetry.Client.Client(string! toolName, System.Type! toolType) -> void
 KeelMatrix.Telemetry.Client.TrackActivation() -> void
 KeelMatrix.Telemetry.Client.TrackHeartbeat() -> void
+KeelMatrix.Telemetry.RepositoryTelemetry
+static KeelMatrix.Telemetry.RepositoryTelemetry.GetEffectiveStatus(string! repositoryRoot) -> KeelMatrix.Telemetry.RepositoryTelemetryStatus!
+static KeelMatrix.Telemetry.RepositoryTelemetry.TryResolveRepositoryRoot(string! startingDirectory, out string! repositoryRoot) -> bool
+KeelMatrix.Telemetry.RepositoryTelemetryScope
+KeelMatrix.Telemetry.RepositoryTelemetryScope.ProcessEnvironment = 1 -> KeelMatrix.Telemetry.RepositoryTelemetryScope
+KeelMatrix.Telemetry.RepositoryTelemetryScope.RepoLocal = 2 -> KeelMatrix.Telemetry.RepositoryTelemetryScope
+KeelMatrix.Telemetry.RepositoryTelemetryScope.RepoLocalDefault = 0 -> KeelMatrix.Telemetry.RepositoryTelemetryScope
+KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetrySourceKind.DotEnv = 4 -> KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetrySourceKind.DotEnvLocal = 3 -> KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetrySourceKind.None = 0 -> KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetrySourceKind.ProcessEnvironment = 1 -> KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetrySourceKind.RepositoryConfig = 2 -> KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetryStatus
+KeelMatrix.Telemetry.RepositoryTelemetryStatus.IsEnabled.get -> bool
+KeelMatrix.Telemetry.RepositoryTelemetryStatus.RepoRoot.get -> string!
+KeelMatrix.Telemetry.RepositoryTelemetryStatus.Scope.get -> KeelMatrix.Telemetry.RepositoryTelemetryScope
+KeelMatrix.Telemetry.RepositoryTelemetryStatus.WinningPath.get -> string?
+KeelMatrix.Telemetry.RepositoryTelemetryStatus.WinningSourceKind.get -> KeelMatrix.Telemetry.RepositoryTelemetrySourceKind
+KeelMatrix.Telemetry.RepositoryTelemetryStatus.WinningVariableName.get -> string?
