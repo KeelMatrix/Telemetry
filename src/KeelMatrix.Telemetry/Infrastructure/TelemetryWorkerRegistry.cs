@@ -40,6 +40,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
             // Length-prefixed segments avoid delimiter-based collisions.
             return string.Concat(
+                // "v1" = canonical key format version (not product/versioning).
+                // Allows changing the key schema later (v2, etc.) without colliding with existing keys.
                 "v1|tool:",
                 canonicalToolName.Length.ToString(CultureInfo.InvariantCulture),
                 ":",

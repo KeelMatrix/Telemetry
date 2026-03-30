@@ -13,6 +13,8 @@ Telemetry is **opt-out**.
 
 The package is designed to be best-effort and non-blocking from normal call sites. Telemetry failures are swallowed and must not affect application behavior.
 
+The explicit `RepositoryTelemetry` inspection API is different: it is intended for consuming tools that deliberately inspect repo-local telemetry status, and it may synchronously inspect repo-local config files on the caller thread. It does not emit telemetry.
+
 ## What telemetry is for
 
 Telemetry is used to measure coarse-grained package usage: whether a tool or library was activated, and whether it was used again in a later week.
@@ -130,7 +132,8 @@ Notes:
 - `.env` and `.env.local` support simple `KEY=VALUE` lines
 - an optional case-insensitive `export ` prefix is supported
 - when a Git root exists, it is preferred over higher nested non-Git repo markers such as `global.json` or `Directory.Build.props`
-- repo-local file lookup is resolved on the worker thread, not on the caller thread
+- for normal telemetry emission, repo-local file lookup is resolved on the worker thread, not on the caller thread
+- explicit `RepositoryTelemetry` inspection evaluates the same precedence on the caller thread when a consuming tool explicitly asks for repo status
 
 If telemetry is disabled, the package does not send events, including any locally queued backlog.
 
