@@ -93,10 +93,34 @@ jobs:
       - name: Restore
         run: dotnet restore KeelMatrix.Telemetry.slnx
 
+      - name: Resolve package version
+        id: package_version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Invalid release tag '${GITHUB_REF_NAME}'. Expected vX.Y.Z." >&2
+            exit 1
+          fi
+
+          package_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          echo "is_release=true" >> "$GITHUB_OUTPUT"
+          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
+          echo "Release tag ${GITHUB_REF_NAME} resolved to package version ${package_version}."
+
       - name: Build
         run: dotnet build src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-restore
 
+      - name: Pack release
+        if: steps.package_version.outputs.is_release == 'true'
+        run: dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols -p:Version=${{ steps.package_version.outputs.version }} --p:SymbolPackageFormat=snupkg --output ./artifacts/packages
+
       - name: Pack
+        if: steps.package_version.outputs.is_release != 'true'
         run: dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols --p:SymbolPackageFormat=snupkg --output ./artifacts/packages
 
       - name: Upload packages
