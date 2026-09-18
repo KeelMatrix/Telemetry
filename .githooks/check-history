@@ -10,8 +10,14 @@ if [ "$#" -eq 0 ]; then
 elif [ "$#" -eq 2 ]; then
   start=$1
   end=$2
-  if [ -z "$start" ] || [ "$start" = '0000000000000000000000000000000000000000' ]; then
-    commits=$(git rev-list "$end")
+  if [ -z "$start" ] || [ "$start" = '0000000000000000000000000000000000000000' ] || \
+    ! git rev-parse --verify "$start^{commit}" >/dev/null 2>&1; then
+    policy_start=$(git rev-list --reverse "$end" -- .githooks/commit-msg | sed -n '1p')
+    if [ -n "$policy_start" ] && policy_parent=$(git rev-parse --verify "$policy_start^" 2>/dev/null); then
+      commits=$(git rev-list "$policy_parent..$end")
+    else
+      commits=$(git rev-list "$end")
+    fi
   else
     commits=$(git rev-list "$start..$end")
   fi

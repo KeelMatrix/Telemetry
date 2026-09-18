@@ -16,6 +16,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Test history check
+        shell: bash
+        run: sh .githooks/check-history-test.sh
+
       - name: Check introduced commits
         shell: bash
         env:
