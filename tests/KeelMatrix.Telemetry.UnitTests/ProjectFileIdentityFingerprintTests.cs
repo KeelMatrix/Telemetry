@@ -1,6 +1,7 @@
 // Copyright (c) KeelMatrix
 
 using System.Reflection;
+using System.Diagnostics;
 using System.Text;
 using FluentAssertions;
 
@@ -73,6 +74,42 @@ public sealed class ProjectFileIdentityFingerprintTests {
         var rightCanonical = InvokeCanonicalizeStructuredXml(right, "slnx.v1");
 
         leftCanonical.Should().Equal(rightCanonical);
+    }
+
+    [Fact]
+    public void CanonicalizeDeepXml_IsBoundedInIsolatedChildProcess() {
+        const string childMarker = "KEELMATRIX_DEEP_XML_CHILD";
+        const string testName = nameof(CanonicalizeDeepXml_IsBoundedInIsolatedChildProcess);
+
+        if (Environment.GetEnvironmentVariable(childMarker) == "1") {
+            var slnx = Encoding.UTF8.GetBytes(CreateDeepXml("Solution", "Node"));
+            var slnxCanonical = InvokeCanonicalizeStructuredXml(slnx, "slnx.v1");
+            Encoding.UTF8.GetString(slnxCanonical).Should().NotStartWith("slnx.v1\n");
+
+            var project = Encoding.UTF8.GetBytes(CreateDeepXml("Project", "PropertyGroup"));
+            var projectCanonical = InvokeCanonicalizeMsbuild(project);
+            Encoding.UTF8.GetString(projectCanonical).Should().NotStartWith("msbuild.v1\n");
+            return;
+        }
+
+        using var process = new Process {
+            StartInfo = new ProcessStartInfo {
+                FileName = "dotnet",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            }
+        };
+        process.StartInfo.ArgumentList.Add("vstest");
+        process.StartInfo.ArgumentList.Add(typeof(ProjectFileIdentityFingerprintTests).Assembly.Location);
+        process.StartInfo.ArgumentList.Add($"--TestCaseFilter:FullyQualifiedName~{typeof(ProjectFileIdentityFingerprintTests).FullName}.{testName}");
+        process.StartInfo.Environment[childMarker] = "1";
+
+        process.Start().Should().BeTrue();
+        process.WaitForExit(30_000).Should().BeTrue("deep XML must fail safely without hanging the child process");
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.ExitCode.Should().Be(0, output);
     }
 
     [Fact]
@@ -160,6 +197,14 @@ public sealed class ProjectFileIdentityFingerprintTests {
             target: null,
             args: [rawBytes, header])!;
 
+    private static byte[] InvokeCanonicalizeMsbuild(byte[] rawBytes) =>
+        (byte[])FingerprintType.InvokeMember(
+            "CanonicalizeMsbuild",
+            BindingFlags.InvokeMethod | BindingFlags.NonPublic | BindingFlags.Static,
+            binder: null,
+            target: null,
+            args: [rawBytes])!;
+
     private static bool InvokeTryComputeIdentityFingerprintFromProjectFiles(out byte[] fingerprintBytes) {
         var parameters = new object?[] { null };
 
@@ -178,5 +223,17 @@ public sealed class ProjectFileIdentityFingerprintTests {
         var path = Path.Combine(Path.GetTempPath(), "KeelMatrix.Telemetry.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static string CreateDeepXml(string rootName, string childName) {
+        var builder = new StringBuilder("<" + rootName + ">", 32 * 1024);
+        for (var i = 0; i < TelemetryConfig.ProjectIdentity.MaxXmlDepth + 32; i++)
+            builder.Append('<').Append(childName).Append('>');
+
+        builder.Append("value");
+        for (var i = 0; i < TelemetryConfig.ProjectIdentity.MaxXmlDepth + 32; i++)
+            builder.Append("</").Append(childName).Append('>');
+
+        return builder.Append("</").Append(rootName).Append('>').ToString();
     }
 }

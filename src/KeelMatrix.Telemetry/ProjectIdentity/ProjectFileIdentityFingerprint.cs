@@ -638,6 +638,9 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                     XmlResolver = null
                 };
 
+                if (HasExcessiveXmlDepth(text, settings))
+                    return Encoding.UTF8.GetBytes(text);
+
                 XDocument doc;
                 using (var sr = new StringReader(text))
                 using (var xr = XmlReader.Create(sr, settings)) {
@@ -760,6 +763,9 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                     XmlResolver = null
                 };
 
+                if (HasExcessiveXmlDepth(text, settings))
+                    return Encoding.UTF8.GetBytes(text);
+
                 XDocument doc;
                 using (var sr = new StringReader(text))
                 using (var xr = XmlReader.Create(sr, settings)) {
@@ -814,6 +820,17 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
 
             sb.Append("</").Append(element.Name.LocalName).Append('>');
+        }
+
+        private static bool HasExcessiveXmlDepth(string text, XmlReaderSettings settings) {
+            using var sr = new StringReader(text);
+            using var reader = XmlReader.Create(sr, settings);
+            while (reader.Read()) {
+                if (reader.Depth > TelemetryConfig.ProjectIdentity.MaxXmlDepth)
+                    return true;
+            }
+
+            return false;
         }
 
         private static byte[] CanonicalizeGlobalJson(byte[] rawBytes) {
