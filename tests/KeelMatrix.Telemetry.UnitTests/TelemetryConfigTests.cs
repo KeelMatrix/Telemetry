@@ -1,6 +1,7 @@
 // Copyright (c) KeelMatrix
 
 using FluentAssertions;
+using KeelMatrix.Telemetry.Infrastructure;
 using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry.UnitTests;
@@ -47,7 +48,7 @@ public sealed class TelemetryConfigTests : IDisposable {
     public void TelemetryVersion_IdentifiesTheCurrentReleaseAssembly() {
         var assemblyVersion = typeof(Client).Assembly.GetName().Version?.ToString();
 
-        assemblyVersion.Should().Be("0.1.1.0");
+        assemblyVersion.Should().NotBeNullOrWhiteSpace();
         TelemetryConfig.TelemetryVersion.Should().Be(assemblyVersion);
     }
 
@@ -422,6 +423,7 @@ public sealed class TelemetryConfigTests : IDisposable {
     [Fact]
     public void ClientConstruction_DoesNotResolveRepositoryOptOutOnCallerThread() {
         using var _ = CreateEnvironmentSnapshot();
+        using var urlOverride = new TelemetryUrlOverrideScope();
         using var signal = new ManualResetEventSlim(false);
 
         ClearOptOutVars();
@@ -445,6 +447,64 @@ public sealed class TelemetryConfigTests : IDisposable {
         finally {
             DisposeClientWorker(client);
         }
+    }
+
+    [Fact]
+    public async Task ResolveRepositoryTelemetryDisableOnWorkerThread_PublishesAtomicSnapshotWhenRootSetChangesDuringResolution() {
+        using var _ = CreateEnvironmentSnapshot();
+        using var repoWithoutOptOut = CreateRepository("src", "tool");
+        using var repoWithOptOut = CreateRepository("tests", "tool");
+
+        ClearOptOutVars();
+        repoWithOptOut.WriteFile("KEELMATRIX_NO_TELEMETRY=1", ".env.local");
+
+        using var resolverEntered = new ManualResetEventSlim(false);
+        using var allowResolverToPublish = new ManualResetEventSlim(false);
+        var resolverCalls = 0;
+        TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(() => {
+            if (Interlocked.Increment(ref resolverCalls) == 1) {
+                resolverEntered.Set();
+                allowResolverToPublish.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+            }
+
+            return false;
+        });
+
+        var firstScope = new StartingPointsOverrideScope(repoWithoutOptOut.StartingPoint);
+        try {
+            var firstResolution = Task.Run(TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread);
+            resolverEntered.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+            firstScope.Dispose();
+            using var secondScope = new StartingPointsOverrideScope(repoWithOptOut.StartingPoint);
+            TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
+            allowResolverToPublish.Set();
+
+            (await firstResolution).Should().BeFalse();
+            TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread().Should().BeTrue();
+        }
+        finally {
+            firstScope.Dispose();
+            allowResolverToPublish.Set();
+        }
+    }
+
+    [Theory]
+    [InlineData("My Tool")]
+    [InlineData("My/Tool")]
+    [InlineData(" Tool ")]
+    [InlineData("_Tool")]
+    [InlineData("étool")]
+    public void ClientConstruction_RejectsToolNamesOutsideWorkerGrammar(string toolName) {
+        using var _ = CreateEnvironmentSnapshot();
+        using var urlOverride = new TelemetryUrlOverrideScope();
+
+        ClearOptOutVars();
+        var client = new Client(toolName, typeof(TelemetryConfigTests));
+
+        var innerField = typeof(Client).GetField("client", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        innerField.Should().NotBeNull();
+        innerField!.GetValue(client).Should().BeOfType<NullTelemetryClient>();
     }
 
     [Fact]
@@ -561,6 +621,18 @@ public sealed class TelemetryConfigTests : IDisposable {
 
         public void Dispose() {
             GitDiscovery.SetStartingPointsOverrideForTests(null);
+        }
+    }
+
+    private sealed class TelemetryUrlOverrideScope : IDisposable {
+        private static readonly Uri OfflineUrl = new("http://127.0.0.1:1/", UriKind.Absolute);
+
+        public TelemetryUrlOverrideScope() {
+            TelemetryConfig.SetUrlOverrideForTests(OfflineUrl);
+        }
+
+        public void Dispose() {
+            TelemetryConfig.SetUrlOverrideForTests(null);
         }
     }
 

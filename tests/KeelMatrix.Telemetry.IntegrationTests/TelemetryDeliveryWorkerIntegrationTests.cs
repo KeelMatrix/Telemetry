@@ -365,6 +365,74 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         await WaitUntilAsync(() => sender.Received.Count >= 1, TimeSpan.FromSeconds(5));
     }
 
+    [Fact]
+    public async Task ControlledInterleaving_PreservesActivationRequestWhileDeliveryIsBlocked() {
+        using var sender = new PausingTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
+
+        using var worker = harness.CreateWorker();
+        await sender.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        worker.RequestActivation();
+        sender.ReleaseFirst();
+
+        await WaitUntilAsync(
+            () => sender.Received.Any(json => ContainsEvent(json, "activation")),
+            TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ControlledInterleaving_PreservesHeartbeatRequestWhileDeliveryIsBlocked() {
+        using var sender = new PausingTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
+
+        using var worker = harness.CreateWorker();
+        await sender.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        worker.RequestHeartbeat();
+        sender.ReleaseFirst();
+
+        await WaitUntilAsync(
+            () => sender.Received.Any(json => ContainsEvent(json, "heartbeat")),
+            TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ControlledInterleaving_PreservesActivationRequestAcrossRetrySignal() {
+        using var sender = new RetryOnceTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
+
+        using var worker = harness.CreateWorker();
+        await sender.FirstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        worker.RequestActivation();
+
+        await WaitUntilAsync(
+            () => sender.Received.Any(json => ContainsEvent(json, "activation")),
+            TimeSpan.FromSeconds(8));
+    }
+
+    [Fact]
+    public async Task ControlledInterleaving_DisposeWakesBlockedDeliveryAndCompletes() {
+        using var sender = new PausingTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
+
+        var worker = harness.CreateWorker();
+        await sender.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var disposeTask = Task.Run(worker.Dispose);
+        await disposeTask.WaitAsync(TimeSpan.FromSeconds(5));
+        disposeTask.IsCompletedSuccessfully.Should().BeTrue();
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout) {
         var sw = Stopwatch.StartNew();
         while (sw.Elapsed < timeout) {
@@ -380,6 +448,12 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     private static string ReadHashField(string json, string fieldName) {
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.GetProperty(fieldName).GetString() ?? string.Empty;
+    }
+
+    private static bool ContainsEvent(string json, string expectedEvent) {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("event", out var eventProperty)
+            && string.Equals(eventProperty.GetString(), expectedEvent, StringComparison.Ordinal);
     }
 
     private static string CreateGitRepoRoot(string name, string originRemoteUrl) {
@@ -569,5 +643,26 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         public void ReleaseFirst() => releaseFirst.TrySetResult(true);
 
         public void Dispose() => releaseFirst.TrySetCanceled();
+    }
+
+    private sealed class RetryOnceTelemetrySender : ITelemetrySender {
+        private int attempts;
+
+        public TaskCompletionSource<bool> FirstAttemptStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ConcurrentQueue<string> Received { get; } = new();
+
+        public Task<bool> TrySendAsync(string json, CancellationToken token) {
+            token.ThrowIfCancellationRequested();
+            Received.Enqueue(json);
+
+            if (Interlocked.Increment(ref attempts) == 1) {
+                FirstAttemptStarted.TrySetResult(true);
+                return Task.FromResult(false);
+            }
+
+            return Task.FromResult(true);
+        }
+
+        public void Dispose() { }
     }
 }
