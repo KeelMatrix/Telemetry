@@ -476,18 +476,23 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     }
 
     private sealed class StartingPointsOverrideScope : IDisposable {
+        private readonly string[]? previousStartingPoints;
+
         public StartingPointsOverrideScope(params string[] startingPoints) {
+            previousStartingPoints = GitDiscovery.GetStartingPointsOverrideForTests();
             GitDiscovery.SetStartingPointsOverrideForTests(startingPoints);
         }
 
         public void Dispose() {
-            GitDiscovery.SetStartingPointsOverrideForTests(null);
+            GitDiscovery.SetStartingPointsOverrideForTests(previousStartingPoints);
         }
     }
 
     private sealed class WorkerHarness : IDisposable {
         private readonly EnvVarScope env;
         private readonly string rootDir;
+        private readonly StartingPointsOverrideScope? defaultIdentityScope;
+        private readonly string? defaultIdentityRoot;
 
         private readonly ITelemetrySender telemetrySender;
 
@@ -503,6 +508,13 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
             Sender = new RecordingTelemetrySender();
             telemetrySender = sender ?? Sender;
+
+            if (GitDiscovery.GetStartingPointsOverrideForTests() is null) {
+                defaultIdentityRoot = CreateGitRepoRoot(
+                    "worker-harness-identity",
+                    "https://github.com/KeelMatrix/Telemetry.git");
+                defaultIdentityScope = new StartingPointsOverrideScope(defaultIdentityRoot);
+            }
 
             var toolNameUpper = "ITW_" + Guid.NewGuid().ToString("N")[..12];
             RuntimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryDeliveryWorkerIntegrationTests));
@@ -544,7 +556,8 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
                 Sender.Dispose();
             env.Dispose();
             TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
-            GitDiscovery.SetStartingPointsOverrideForTests(null);
+            defaultIdentityScope?.Dispose();
+            TestCleanup.TryDeleteDirectory(defaultIdentityRoot);
             // Cleanup is deferred to the end of the integration test process.
         }
 

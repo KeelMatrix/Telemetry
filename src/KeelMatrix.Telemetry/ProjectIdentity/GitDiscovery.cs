@@ -27,6 +27,11 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             Volatile.Write(ref startingPointsOverrideForTests, normalized);
         }
 
+        internal static string[]? GetStartingPointsOverrideForTests() {
+            var current = Volatile.Read(ref startingPointsOverrideForTests);
+            return current is null ? null : [.. current];
+        }
+
         internal static IEnumerable<string> GetStartingPoints() {
             var overridePoints = Volatile.Read(ref startingPointsOverrideForTests);
             if (overridePoints is { Length: > 0 }) {
