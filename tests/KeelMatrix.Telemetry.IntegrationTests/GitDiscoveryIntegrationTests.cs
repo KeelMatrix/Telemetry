@@ -1,6 +1,7 @@
 // Copyright (c) KeelMatrix
 
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using FluentAssertions;
 using KeelMatrix.Telemetry.ProjectIdentity;
@@ -140,23 +141,31 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
 
     [Fact]
     public void TryComputeRootCommitHashBestEffort_RejectsLooseObjectWithCorruptedZlibTrailer() {
-        var repositoryRoot = CreateGitRepositoryWithRootAndChildCommit();
-        var rootCommitHash = RunGit(repositoryRoot, "rev-parse", "HEAD~1").Trim().ToLowerInvariant();
-        var objectPath = Path.Combine(
-            repositoryRoot,
-            ".git",
-            "objects",
-            rootCommitHash[..2],
-            rootCommitHash[2..]);
+        const string rootCommitHash = "1111111111111111111111111111111111111111";
+        var gitDir = Path.Combine(root, "corrupt-trailer-repository", ".git");
+        var refsDir = Path.Combine(gitDir, "refs", "heads");
+        var objectsDir = Path.Combine(gitDir, "objects", rootCommitHash[..2]);
+        Directory.CreateDirectory(refsDir);
+        Directory.CreateDirectory(objectsDir);
+        File.WriteAllText(Path.Combine(gitDir, "HEAD"), "ref: refs/heads/main\n", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(refsDir, "main"), rootCommitHash + "\n", Encoding.UTF8);
 
-        var objectBytes = File.ReadAllBytes(objectPath);
+        var commitPayload = Encoding.UTF8.GetBytes(
+            "commit 14\0tree 2222222222222222222222222222222222222222\n\nroot commit\n");
+        byte[] objectBytes;
+        using (var compressed = new MemoryStream()) {
+            using (var zlib = new ZLibStream(compressed, CompressionMode.Compress, leaveOpen: true))
+                zlib.Write(commitPayload, 0, commitPayload.Length);
+
+            objectBytes = compressed.ToArray();
+        }
+
         objectBytes.Length.Should().BeGreaterThan(4);
         objectBytes[^1] ^= 0xff;
-        File.Delete(objectPath);
-        File.WriteAllBytes(objectPath, objectBytes);
+        File.WriteAllBytes(Path.Combine(objectsDir, rootCommitHash[2..]), objectBytes);
 
         GitDiscovery.TryComputeRootCommitHashBestEffort(
-            Path.Combine(repositoryRoot, ".git"),
+            gitDir,
             out _).Should().BeFalse("a loose Git object with an invalid Adler-32 trailer is corrupt");
     }
 
