@@ -44,6 +44,14 @@ public sealed class TelemetryConfigTests : IDisposable {
     }
 
     [Fact]
+    public void TelemetryVersion_IdentifiesTheCurrentReleaseAssembly() {
+        var assemblyVersion = typeof(Client).Assembly.GetName().Version?.ToString();
+
+        assemblyVersion.Should().Be("0.1.1.0");
+        TelemetryConfig.TelemetryVersion.Should().Be(assemblyVersion);
+    }
+
+    [Fact]
     public void IsTelemetryDisabled_ReturnsFalse_WhenAllOptOutVarsCleared() {
         using var _ = CreateEnvironmentSnapshot();
 
