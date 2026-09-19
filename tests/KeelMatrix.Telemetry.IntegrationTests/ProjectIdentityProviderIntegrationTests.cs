@@ -47,6 +47,32 @@ public sealed class ProjectIdentityProviderIntegrationTests : IDisposable {
     }
 
     [Fact]
+    public void SameAzureRepo_LocalGitRemote_AndCiEnvVars_ResolveSameProjectHash() {
+        var repoDir = CreateGitRepo("same-azure-repo", "https://dev.azure.com/Org/Project/_git/Repo");
+
+        using var localEnv = TestEnvironmentScope.Clean();
+        var local = ResolveIdentities(
+            repoDir,
+            CreateToolName("AZURE_LOCAL"),
+            runtimeInfo => runtimeInfo.SetCiOverrideForTests(false));
+
+        using var ciEnv = TestEnvironmentScope.Clean(
+            ("CI", "true"),
+            ("SYSTEM_COLLECTIONURI", "https://dev.azure.com/Org/"),
+            ("BUILD_REPOSITORY_NAME", "Repo"),
+            ("BUILD_REPOSITORY_URI", "https://dev.azure.com/Org/Project/_git/Repo"));
+
+        var ci = ResolveIdentities(
+            repoDir,
+            CreateToolName("AZURE_CI"),
+            runtimeInfo => runtimeInfo.SetCiOverrideForTests(true));
+
+        local.HasProjectIdentity.Should().BeTrue();
+        ci.HasProjectIdentity.Should().BeTrue();
+        local.ProjectHash.Should().Be(ci.ProjectHash);
+    }
+
+    [Fact]
     public void SameRepo_DifferentPersistedSalts_KeepProjectHashStable_AndChangeInstallationHash() {
         var repoDir = CreateGitRepo("same-repo-different-salts", "https://github.com/KeelMatrix/Telemetry.git");
 

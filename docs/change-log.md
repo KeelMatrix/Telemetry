@@ -19,6 +19,11 @@
 - `telemetry.salt` is persisted only to derive installation identity
 - `telemetry.salt` does not affect `project_hash`
 
+Identity normalization may be corrected as provider and Git formats are clarified. A corrected
+identity can therefore produce a different hash for a context that was previously misidentified.
+Historical telemetry is not rewritten, speculative mappings are not created, and the identity
+schema is unchanged.
+
 ## Resolution Order
 
 - Resolve `project_hash` from normalized repo identity first.

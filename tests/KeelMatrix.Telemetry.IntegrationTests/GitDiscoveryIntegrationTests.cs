@@ -1,5 +1,6 @@
 // Copyright (c) KeelMatrix
 
+using System.Diagnostics;
 using System.Text;
 using FluentAssertions;
 using KeelMatrix.Telemetry.ProjectIdentity;
@@ -135,6 +136,84 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
         var actObj = () => GitDiscovery.TryComputeRootCommitHashBestEffort(gitDir, out _);
         actObj.Should().NotThrow();
         actObj().Should().BeFalse();
+    }
+
+    [Fact]
+    public void TryComputeRootCommitHashBestEffort_TraversesRealRootCommitFromLinkedWorktree() {
+        var repositoryRoot = CreateGitRepositoryWithRootAndChildCommit();
+        var linkedWorktree = Path.Combine(root, "linked-worktree");
+
+        RunGit(repositoryRoot, "remote", "add", "origin", "https://example.com/owner/repo.git");
+        RunGit(repositoryRoot, "worktree", "add", "-b", "linked", linkedWorktree, "HEAD");
+
+        GitDiscovery.TryFindGitDirectory(linkedWorktree, out var linkedGitDir).Should().BeTrue();
+        linkedGitDir.Should().NotBe(Path.Combine(linkedWorktree, ".git"));
+
+        GitDiscovery.TryReadOriginRemoteUrl(linkedGitDir, out var originUrl).Should().BeTrue();
+        originUrl.Should().Be("https://example.com/owner/repo.git");
+
+        var expectedRootCommit = RunGit(repositoryRoot, "rev-parse", "HEAD~1").Trim().ToLowerInvariant();
+        GitDiscovery.TryComputeRootCommitHashBestEffort(linkedGitDir, out var actualRootCommit).Should().BeTrue();
+        actualRootCommit.Should().Be(expectedRootCommit);
+    }
+
+    private string CreateGitRepositoryWithRootAndChildCommit() {
+        var repositoryRoot = Path.Combine(root, "generated-repository");
+        Directory.CreateDirectory(repositoryRoot);
+
+        RunGit(repositoryRoot, "init");
+        RunGit(repositoryRoot, "config", "user.name", "KeelMatrix Test Author");
+        RunGit(repositoryRoot, "config", "user.email", "tests@keelmatrix.invalid");
+        RunGit(repositoryRoot, "config", "commit.gpgsign", "false");
+
+        File.WriteAllText(Path.Combine(repositoryRoot, "root.txt"), "root\n", Encoding.UTF8);
+        RunGit(repositoryRoot, "add", "root.txt");
+        RunGitWithEnvironment(repositoryRoot,
+            new[] { ("GIT_AUTHOR_DATE", "2001-01-01T00:00:00Z"), ("GIT_COMMITTER_DATE", "2001-01-01T00:00:00Z") },
+            "commit", "--message", "root commit");
+
+        File.WriteAllText(Path.Combine(repositoryRoot, "child.txt"), "child\n", Encoding.UTF8);
+        RunGit(repositoryRoot, "add", "child.txt");
+        RunGitWithEnvironment(repositoryRoot,
+            new[] { ("GIT_AUTHOR_DATE", "2001-01-02T00:00:00Z"), ("GIT_COMMITTER_DATE", "2001-01-02T00:00:00Z") },
+            "commit", "--message", "child commit");
+
+        return repositoryRoot;
+    }
+
+    private static string RunGit(string workingDirectory, params string[] arguments) {
+        return RunGitWithEnvironment(workingDirectory, null, arguments);
+    }
+
+    private static string RunGitWithEnvironment(
+        string workingDirectory,
+        (string Name, string Value)[]? env,
+        params string[] arguments) {
+
+        var startInfo = new ProcessStartInfo {
+            FileName = "git",
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+
+        foreach (var argument in arguments)
+            startInfo.ArgumentList.Add(argument);
+
+        if (env is not null) {
+            foreach (var (name, value) in env)
+                startInfo.Environment[name] = value;
+        }
+
+        using var process = Process.Start(startInfo);
+        process.Should().NotBeNull();
+        var output = process!.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        process.ExitCode.Should().Be(0, $"git {string.Join(" ", arguments)} failed: {error}");
+        return output;
     }
 
     private static bool IsSameOrUnder(string candidate, string rootDir) {

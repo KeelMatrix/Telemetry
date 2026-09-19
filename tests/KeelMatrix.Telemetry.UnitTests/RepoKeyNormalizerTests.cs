@@ -72,12 +72,25 @@ public sealed class RepoKeyNormalizerTests {
     [InlineData("https://git.example.com:8080/owner/repo", "https://git.example.com:8080/owner/repo", ":8080")]
     [InlineData("http://git.example.com:8080/owner/repo", "https://git.example.com:8080/owner/repo", ":8080")]
     [InlineData("ssh://git.example.com:2222/owner/repo", "https://git.example.com:2222/owner/repo", ":2222")]
-    [InlineData("git@git.example.com:2222/owner/repo.git", "https://git.example.com:2222/owner/repo", ":2222")]
     public void TryNormalize_PreservesNonDefaultPort(string input, string expected, string expectedPort) {
         RepoKeyNormalizer.TryNormalize(input, out var normalized).Should().BeTrue();
         normalized.Should().Be(expected);
 
         normalized.Should().Contain(expectedPort);
+    }
+
+    [Fact]
+    public void TryNormalize_ScpNumericLeadingSegment_IsRepositoryPath_NotPort() {
+        RepoKeyNormalizer.TryNormalize("git@git.example.com:123/team/repo.git", out var normalized).Should().BeTrue();
+
+        normalized.Should().Be("https://git.example.com/123/team/repo");
+    }
+
+    [Fact]
+    public void TryNormalize_SshUrlNumericSegment_IsExplicitPort() {
+        RepoKeyNormalizer.TryNormalize("ssh://git@git.example.com:123/team/repo.git", out var normalized).Should().BeTrue();
+
+        normalized.Should().Be("https://git.example.com:123/team/repo");
     }
 
     [Theory]

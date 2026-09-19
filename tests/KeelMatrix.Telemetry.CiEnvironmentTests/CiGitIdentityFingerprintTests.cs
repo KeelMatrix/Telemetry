@@ -53,16 +53,17 @@ public sealed class CiGitIdentityFingerprintTests {
     }
 
     [Fact]
-    public void TryComputeFromCi_AzureDevOps_UsesSYSTEM_COLLECTIONURI_And_BUILD_REPOSITORY_NAME() {
+    public void TryComputeFromCi_AzureDevOps_PrefersCompleteRepositoryUri_WhenProviderVariablesAreSimultaneous() {
         using var _ = EnvVarScope.Clean(
             ("CI", "true"),
             ("SYSTEM_COLLECTIONURI", "https://dev.azure.com/Org/"),
-            ("BUILD_REPOSITORY_NAME", "Project/Repo"));
+            ("BUILD_REPOSITORY_NAME", "Repo"),
+            ("BUILD_REPOSITORY_URI", "https://dev.azure.com/Org/Project/_git/Repo"));
 
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
         InvokeTryComputeFromCi(runtimeInfoScope.Info, out var bytes).Should().BeTrue();
-        bytes.Should().Equal(ExpectedRepoFingerprint("https://dev.azure.com/org/project/repo"));
+        bytes.Should().Equal(ExpectedRepoFingerprint("https://dev.azure.com/org/project/_git/repo"));
     }
 
     [Fact]
@@ -78,11 +79,28 @@ public sealed class CiGitIdentityFingerprintTests {
     }
 
     [Fact]
-    public void TryComputeFromCi_Bitbucket_UsesBITBUCKET_GIT_HTTP_ORIGIN_And_BITBUCKET_REPO_FULL_NAME() {
+    public void TryComputeFromCi_AzureDevOps_DistinctProjectsDoNotMerge() {
+        using (var first = EnvVarScope.Clean(
+            ("CI", "true"),
+            ("BUILD_REPOSITORY_URI", "https://dev.azure.com/Org/ProjectA/_git/Repo"))) {
+            using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
+            InvokeTryComputeFromCi(runtimeInfoScope.Info, out var projectA).Should().BeTrue();
+
+            using (var second = EnvVarScope.Clean(
+                ("CI", "true"),
+                ("BUILD_REPOSITORY_URI", "https://dev.azure.com/Org/ProjectB/_git/Repo"))) {
+                InvokeTryComputeFromCi(runtimeInfoScope.Info, out var projectB).Should().BeTrue();
+                projectA.Should().NotEqual(projectB);
+            }
+        }
+    }
+
+    [Fact]
+    public void TryComputeFromCi_Bitbucket_PrefersCompleteOrigin_WhenProviderVariablesAreSimultaneous() {
         using var _ = EnvVarScope.Clean(
             ("CI", "true"),
-            ("BITBUCKET_GIT_HTTP_ORIGIN", "https://bitbucket.org"),
-            ("BITBUCKET_REPO_FULL_NAME", "Workspace/Repo"));
+            ("BITBUCKET_GIT_HTTP_ORIGIN", "https://bitbucket.org/Workspace/Repo.git"),
+            ("BITBUCKET_REPO_FULL_NAME", "OtherWorkspace/OtherRepo"));
 
         using var runtimeInfoScope = new RuntimeInfoCiScope(isCi: true);
 
@@ -94,7 +112,6 @@ public sealed class CiGitIdentityFingerprintTests {
     public void TryComputeFromCi_Bitbucket_Fallback_UsesWorkspaceAndSlug() {
         using var _ = EnvVarScope.Clean(
             ("CI", "true"),
-            ("BITBUCKET_GIT_HTTP_ORIGIN", "https://bitbucket.org/"),
             ("BITBUCKET_WORKSPACE", "Workspace"),
             ("BITBUCKET_REPO_SLUG", "Repo"));
 

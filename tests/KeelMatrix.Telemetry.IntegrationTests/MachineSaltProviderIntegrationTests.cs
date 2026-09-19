@@ -57,6 +57,22 @@ public sealed class MachineSaltProviderIntegrationTests {
     }
 
     [Fact]
+    public async Task IndependentlyCreatedProviders_ConvergeOnOnePersistedSalt() {
+        using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
+        ClearOptOutVars();
+
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
+        var results = await Task.WhenAll(Enumerable.Range(0, 32).Select(_ => Task.Run(() =>
+            runtime.CreateMachineSaltProvider().GetOrCreateMachineSaltBytes())));
+
+        results.Should().NotBeEmpty();
+        foreach (var result in results)
+            result.Should().Equal(results[0]);
+
+        Convert.FromHexString(File.ReadAllText(runtime.SaltPath, Encoding.UTF8).Trim()).Should().Equal(results[0]);
+    }
+
+    [Fact]
     public void CorruptSaltFile_IsRegeneratedAndRewritten() {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();

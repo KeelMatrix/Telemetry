@@ -20,8 +20,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
             raw = raw!.Trim();
 
-            // SCP-like: git@host:owner/repo(.git)
-            // (Also supports a non-standard "host:port/path" form used by some systems.)
+            // SCP-like: git@host:owner/repo(.git). A numeric first path segment is
+            // repository path text; explicit SSH ports use ssh://host:port/path.
             if (LooksLikeScpSsh(raw, out var host, out var path)) {
                 return TryNormalizeHostAndPath(host, path, out normalizedRepoKey);
             }
@@ -112,52 +112,13 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (path.Length == 0)
                 return false;
 
-            // Support a non-standard SCP-like variant:
-            //   git@host:2222/owner/repo.git  =>  https://host:2222/owner/repo
-            // We interpret a leading numeric segment before the first '/' as a port only when:
-            // - host does not already contain ':'
-            // - the segment parses as a valid TCP port (1..65535)
-            // - and the remaining path still looks like <owner>/<repo>(...)
-            string hostWithPort = host;
-            if (host.IndexOf(':') < 0) {
-                int slash = path.IndexOf('/');
-
-                if (slash > 0) {
-#pragma warning disable IDE0057 // Use range operator
-                    var firstSegment = path.Substring(0, slash);
-                    var rest = path.Substring(slash + 1);
-#pragma warning restore IDE0057
-
-                    if (TryParsePort(firstSegment, out var port) && rest.IndexOf('/') >= 0) {
-                        hostWithPort = host + ":" + port.ToString(CultureInfo.InvariantCulture);
-                        path = rest;
-                    }
-                }
-            }
-
             path = StripDotGitSuffix(path);
             if (path.Length == 0)
                 return false;
 
             path = path.ToLowerInvariant();
-            normalized = "https://" + hostWithPort + "/" + path.TrimEnd('/');
+            normalized = "https://" + host + "/" + path.TrimEnd('/');
             return true;
-        }
-
-        private static bool TryParsePort(string value, out int port) {
-            port = 0;
-
-            if (string.IsNullOrEmpty(value))
-                return false;
-
-            // Ports are typically 2-5 digits; be conservative to avoid false positives.
-            if (value.Length < 2 || value.Length > 5)
-                return false;
-
-            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out port))
-                return false;
-
-            return port is >= 1 and <= 65535;
         }
 
         private static string StripDotGitSuffix(string path) {

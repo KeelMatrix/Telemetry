@@ -128,7 +128,10 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         internal static bool TryReadOriginRemoteUrl(string gitDir, out string originUrl) {
             originUrl = string.Empty;
 
-            var configPath = Path.Combine(gitDir, "config");
+            if (!TryResolveCommonGitDirectory(gitDir, out var commonGitDir))
+                return false;
+
+            var configPath = Path.Combine(commonGitDir, "config");
             if (!TryReadTextFileCapped(configPath, TelemetryConfig.ProjectIdentity.MaxConfigBytes, out var configText))
                 return false;
 
@@ -212,6 +215,9 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         private static bool TryReadHeadCommitHash(string gitDir, out string commitHashLower) {
             commitHashLower = string.Empty;
 
+            if (!TryResolveCommonGitDirectory(gitDir, out var commonGitDir))
+                return false;
+
             var headPath = Path.Combine(gitDir, "HEAD");
             if (!TryReadTextFileCapped(headPath, 16 * 1024, out var headText))
                 return false;
@@ -228,7 +234,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                     return false;
 
                 // refs file
-                var refPath = Path.Combine(gitDir, refName.Replace('/', Path.DirectorySeparatorChar));
+                var refPath = Path.Combine(commonGitDir, refName.Replace('/', Path.DirectorySeparatorChar));
                 if (TryReadTextFileCapped(refPath, 16 * 1024, out var refText)) {
                     var hash = refText.Trim();
                     if (TryNormalize40Hex(hash, out commitHashLower))
@@ -236,7 +242,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 }
 
                 // packed-refs
-                var packedRefsPath = Path.Combine(gitDir, "packed-refs");
+                var packedRefsPath = Path.Combine(commonGitDir, "packed-refs");
                 if (!TryReadTextFileCapped(packedRefsPath, TelemetryConfig.ProjectIdentity.MaxPackedRefsBytes, out var packedRefsText))
                     return false;
 
@@ -276,7 +282,10 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (!TryNormalize40Hex(commitHashLower, out var hash))
                 return false;
 
-            var objPath = Path.Combine(gitDir, "objects", hash.Substring(0, 2), hash.Substring(2));
+            if (!TryResolveCommonGitDirectory(gitDir, out var commonGitDir))
+                return false;
+
+            var objPath = Path.Combine(commonGitDir, "objects", hash.Substring(0, 2), hash.Substring(2));
             if (!File.Exists(objPath)) {
                 // Likely packed objects; not supported in best-effort.
                 return false;
@@ -284,24 +293,33 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
             try {
                 using var fs = new FileStream(objPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                using var ds = new DeflateStream(fs, CompressionMode.Decompress);
-
-                if (!TryReadAllBytesCapped(ds, TelemetryConfig.ProjectIdentity.MaxObjectBytesDecompressed, out var decompressed))
+                Stream decompressedStream;
+#if NET8_0_OR_GREATER
+                decompressedStream = new ZLibStream(fs, CompressionMode.Decompress);
+#else
+                if (!TrySkipZlibHeader(fs))
                     return false;
 
-                // Format: "commit <size>\0<content>"
-                int nul = Array.IndexOf(decompressed, (byte)0);
-                if (nul <= 0 || nul >= decompressed.Length - 1)
-                    return false;
+                decompressedStream = new DeflateStream(fs, CompressionMode.Decompress);
+#endif
+                using (decompressedStream) {
+                    if (!TryReadAllBytesCapped(decompressedStream, TelemetryConfig.ProjectIdentity.MaxObjectBytesDecompressed, out var decompressed))
+                        return false;
 
-                // Validate type prefix starts with "commit ".
-                // (Avoid parsing trees/blobs incorrectly.)
-                var header = Encoding.ASCII.GetString(decompressed, 0, nul);
-                if (!header.StartsWith("commit ", StringComparison.Ordinal))
-                    return false;
+                    // Format: "commit <size>\0<content>"
+                    int nul = Array.IndexOf(decompressed, (byte)0);
+                    if (nul <= 0 || nul >= decompressed.Length - 1)
+                        return false;
 
-                commitText = Encoding.UTF8.GetString(decompressed, nul + 1, decompressed.Length - (nul + 1));
-                return commitText.Length > 0;
+                    // Validate type prefix starts with "commit ".
+                    // (Avoid parsing trees/blobs incorrectly.)
+                    var header = Encoding.ASCII.GetString(decompressed, 0, nul);
+                    if (!header.StartsWith("commit ", StringComparison.Ordinal))
+                        return false;
+
+                    commitText = Encoding.UTF8.GetString(decompressed, nul + 1, decompressed.Length - (nul + 1));
+                    return commitText.Length > 0;
+                }
             }
             catch {
                 return false;
@@ -362,6 +380,71 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 return false;
             }
         }
+
+        private static bool TryResolveCommonGitDirectory(string gitDir, out string commonGitDir) {
+            commonGitDir = string.Empty;
+
+            try {
+                var commondirPath = Path.Combine(gitDir, "commondir");
+                if (!File.Exists(commondirPath)) {
+                    commonGitDir = gitDir;
+                    return Directory.Exists(commonGitDir);
+                }
+
+                if (!TryReadTextFileCapped(commondirPath, 16 * 1024, out var text))
+                    return false;
+
+                var pathPart = text.Trim();
+                if (pathPart.Length == 0)
+                    return false;
+
+                var resolved = Path.IsPathRooted(pathPart)
+                    ? pathPart
+                    : Path.GetFullPath(Path.Combine(gitDir, pathPart));
+
+                if (!Directory.Exists(resolved))
+                    return false;
+
+                commonGitDir = resolved;
+                return true;
+            }
+            catch {
+                return false;
+            }
+        }
+
+#if !NET8_0_OR_GREATER
+        private static bool TrySkipZlibHeader(Stream stream) {
+            var header = new byte[2];
+            if (!TryReadExactly(stream, header, 0, header.Length))
+                return false;
+
+            int cmf = header[0];
+            int flg = header[1];
+            if ((cmf & 0x0F) != 8 || (cmf >> 4) > 7 || ((cmf << 8) + flg) % 31 != 0)
+                return false;
+
+            if ((flg & 0x20) == 0)
+                return true;
+
+            // A preset dictionary adds a four-byte Adler-32 dictionary identifier.
+            var dictionaryId = new byte[4];
+            return TryReadExactly(stream, dictionaryId, 0, dictionaryId.Length);
+        }
+
+        private static bool TryReadExactly(Stream stream, byte[] buffer, int offset, int count) {
+            int total = 0;
+            while (total < count) {
+                int read = stream.Read(buffer, offset + total, count - total);
+                if (read <= 0)
+                    return false;
+
+                total += read;
+            }
+
+            return true;
+        }
+#endif
 
         private static bool TryReadTextFileCapped(string path, int maxBytes, out string text) {
             text = string.Empty;

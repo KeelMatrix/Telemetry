@@ -31,17 +31,26 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (TryReadPersistedSalt(path, out var existing))
                 return existing;
 
-            // 2) Regenerate once and require persistence. If persistence fails, disable telemetry.
+            // 2) Regenerate once and require persistence. A process that loses the publication race
+            // must use the valid winner, never replace it with its own value.
             var newSalt = GenerateRandomSaltBytes();
             if (TryPersistSaltAtomically(path, newSalt)) {
-                // Re-read for race consistency / confirm we wrote something valid.
                 if (TryReadPersistedSalt(path, out var reread))
                     return reread;
 
                 // If we can't read back what we wrote, treat as persistence failure.
-                TelemetryConfig.DisableTelemetryForCurrentProcess();
-                return GenerateRandomSaltBytes();
             }
+
+            // A competing process may have published a winner after our first read or failed
+            // publication attempt. Always prefer that valid value before attempting recovery.
+            if (TryReadPersistedSalt(path, out var winner))
+                return winner;
+
+            // Corrupt or oversized content may be recovered only while holding an atomic,
+            // process-independent recovery lease. A stale lease fails closed rather than
+            // risking deletion of a valid winner.
+            if (TryRecoverCorruptSalt(path) && TryReadPersistedSalt(path, out var recovered))
+                return recovered;
 
             // 3) Cannot persist => disable telemetry for the current process.
             TelemetryConfig.DisableTelemetryForCurrentProcess();
@@ -84,37 +93,75 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         }
 
         private static bool TryPersistSaltAtomically(string path, byte[] saltBytes) {
+            string? tmp = null;
+
             try {
                 var saltHex = ProjectIdentityProvider.ToLowerHex(saltBytes);
-                var tmp = path + ".tmp";
+                tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
                 try {
-                    File.WriteAllText(tmp, saltHex, Encoding.UTF8);
+                    using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                        var bytes = Encoding.UTF8.GetBytes(saltHex);
+                        stream.Write(bytes, 0, bytes.Length);
+                        stream.Flush(true);
+                    }
+
 #if NET8_0_OR_GREATER
-                    File.Move(tmp, path, overwrite: true);
+                    File.Move(tmp, path, overwrite: false);
                     return true;
 #else
-                    // netstandard2.0: emulate overwrite safely.
-                    try {
-                        if (File.Exists(path))
-                            File.Delete(path);
-
-                        File.Move(tmp, path);
-                        return File.Exists(path);
-                    }
-                    catch {
-                        try { File.Delete(tmp); } catch { /* swallow */ }
-                        return false;
-                    }
+                    // File.Move does not replace an existing destination on netstandard2.0.
+                    File.Move(tmp, path);
+                    return true;
 #endif
                 }
                 catch {
-                    try { File.Delete(tmp); } catch { /* swallow */ }
                     return false;
                 }
             }
             catch {
                 return false;
+            }
+            finally {
+                if (!string.IsNullOrEmpty(tmp)) {
+                    try { File.Delete(tmp); } catch { /* swallow */ }
+                }
+            }
+        }
+
+        private static bool TryRecoverCorruptSalt(string path) {
+            var recoveryLockPath = path + ".recovery.lock";
+            FileStream? recoveryLock = null;
+
+            try {
+                recoveryLock = new FileStream(recoveryLockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+
+                // Re-check under the recovery lease. Another process may have published
+                // a valid salt between the caller's read and lease acquisition.
+                if (TryReadPersistedSalt(path, out _))
+                    return true;
+
+                try {
+                    if (File.Exists(path))
+                        File.Delete(path);
+                }
+                catch {
+                    return false;
+                }
+
+                var replacement = GenerateRandomSaltBytes();
+                return TryPersistSaltAtomically(path, replacement) || TryReadPersistedSalt(path, out _);
+            }
+            catch {
+                // An existing recovery lease means another process owns corrupt-file recovery,
+                // or a killed writer left a stale lease. Fail closed in either case.
+                return false;
+            }
+            finally {
+                if (recoveryLock is not null) {
+                    try { recoveryLock.Dispose(); } catch { /* swallow */ }
+                    try { File.Delete(recoveryLockPath); } catch { /* swallow */ }
+                }
             }
         }
 

@@ -72,32 +72,30 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 return true;
             }
 
-            // Azure DevOps: SYSTEM_COLLECTIONURI + BUILD_REPOSITORY_NAME
+            // Azure DevOps: BUILD_REPOSITORY_URI is the complete repository identity.
+            if (TryGetEnv("BUILD_REPOSITORY_URI", out var azRepoUri)) {
+                identity = azRepoUri;
+                return true;
+            }
+
+            // Azure DevOps fallback: SYSTEM_COLLECTIONURI + BUILD_REPOSITORY_NAME.
             if (TryGetEnv("SYSTEM_COLLECTIONURI", out var azCollection) &&
                 TryGetEnv("BUILD_REPOSITORY_NAME", out var azRepoName)) {
                 identity = CombineUrlLike(azCollection, azRepoName);
                 return true;
             }
 
-            // Azure DevOps fallback (minimal canonical var): BUILD_REPOSITORY_URI
-            if (TryGetEnv("BUILD_REPOSITORY_URI", out var azRepoUri)) {
-                identity = azRepoUri;
-                return true;
-            }
-
             // Bitbucket:
-            // - Prefer BITBUCKET_REPO_FULL_NAME (workspace/repo)
-            if (TryGetEnv("BITBUCKET_GIT_HTTP_ORIGIN", out var bbOrigin) &&
-                TryGetEnv("BITBUCKET_REPO_FULL_NAME", out var bbFullName)) {
-                identity = CombineUrlLike(bbOrigin, bbFullName);
+            // BITBUCKET_GIT_HTTP_ORIGIN is already the complete repository URL.
+            if (TryGetEnv("BITBUCKET_GIT_HTTP_ORIGIN", out var bbOrigin)) {
+                identity = bbOrigin;
                 return true;
             }
 
-            // - Fallback: BITBUCKET_WORKSPACE + BITBUCKET_REPO_SLUG
-            if (TryGetEnv("BITBUCKET_GIT_HTTP_ORIGIN", out bbOrigin) &&
-                TryGetEnv("BITBUCKET_WORKSPACE", out var bbWorkspace) &&
+            // Fallback when only incomplete repository components are available.
+            if (TryGetEnv("BITBUCKET_WORKSPACE", out var bbWorkspace) &&
                 TryGetEnv("BITBUCKET_REPO_SLUG", out var bbSlug)) {
-                identity = CombineUrlLike(bbOrigin, bbWorkspace.TrimEnd('/') + "/" + bbSlug.TrimStart('/'));
+                identity = CombineUrlLike("https://bitbucket.org", bbWorkspace.TrimEnd('/') + "/" + bbSlug.TrimStart('/'));
                 return true;
             }
 
