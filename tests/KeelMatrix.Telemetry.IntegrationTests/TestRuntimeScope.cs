@@ -36,7 +36,9 @@ internal sealed class TestRuntimeScope : IDisposable {
     public string SaltPath => Path.Combine(RootDir, "telemetry.salt");
 
     public static TestRuntimeScope Create(Type toolType, string prefix = "INTEGRATIONTEST_") {
-        return new TestRuntimeScope(prefix + Guid.NewGuid().ToString("N"), toolType);
+        var candidate = prefix + Guid.NewGuid().ToString("N");
+        var toolName = candidate[..Math.Min(candidate.Length, TelemetryConfig.ToolMaxLength)];
+        return new TestRuntimeScope(toolName, toolType);
     }
 
     public TelemetryDeliveryWorker CreateWorker() {

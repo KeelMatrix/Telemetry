@@ -17,7 +17,12 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
         private readonly SemaphoreSlim signal = new(0, 1);
         private readonly CancellationTokenSource cts = new();
+        private int disposed;
         private int signalPending;
+        private readonly object testCycleLock = new();
+        private long completedTestCycle;
+        private TaskCompletionSource<long> testCycleCompletion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Signals set from calling threads (must be non-blocking to set).
         private int activationRequested; // 0/1
@@ -101,6 +106,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             Signal();
         }
 
+        internal long CompletedTestCycle => Volatile.Read(ref completedTestCycle);
+
+        internal Task WaitForTestCycleAsync(long previousCycle) {
+            lock (testCycleLock) {
+                return completedTestCycle > previousCycle
+                    ? Task.CompletedTask
+                    : testCycleCompletion.Task;
+            }
+        }
+
         /// <summary>
         /// Signals the worker to wake up. Must not block.
         /// </summary>
@@ -122,6 +137,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
             while (!token.IsCancellationRequested) {
                 try {
+                    try {
                     // The timeout gives stale processing claims a bounded repeated recovery
                     // opportunity even when the process receives no new tracking call.
                     _ = await signal.WaitAsync(QueueRecoveryPollInterval, token).ConfigureAwait(false);
@@ -270,8 +286,25 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     }
 
                     ResetBackoff();
+                    }
+                }
+                finally {
+                    SignalTestCycleCompleted();
                 }
             }
+        }
+
+        private void SignalTestCycleCompleted() {
+            TaskCompletionSource<long> completed;
+            long cycle;
+
+            lock (testCycleLock) {
+                cycle = ++completedTestCycle;
+                completed = testCycleCompletion;
+                testCycleCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            completed.TrySetResult(cycle);
         }
 
         /// <summary>
@@ -436,15 +469,27 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         public void Dispose() {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return;
+
             try {
                 cts.Cancel();
-                cts.Dispose();
                 signal.Release();
             }
             catch (SemaphoreFullException) { /* swallow */ }
             catch { /* swallow */ }
 
             try {
+                if (Task.CurrentId != _workerTask.Id)
+                    _workerTask.GetAwaiter().GetResult();
+            }
+            catch {
+                // Telemetry shutdown must not affect the host process.
+            }
+
+            try {
+                cts.Dispose();
+                signal.Dispose();
                 httpSender.Dispose();
             }
             catch {

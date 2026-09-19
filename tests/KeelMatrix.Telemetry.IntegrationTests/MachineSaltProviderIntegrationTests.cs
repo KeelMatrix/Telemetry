@@ -132,7 +132,8 @@ public sealed class MachineSaltProviderIntegrationTests {
         }
 
         public void Dispose() {
-            foreach (var (Name, Value) in snapshot) {
+            for (var i = snapshot.Length - 1; i >= 0; i--) {
+                var (Name, Value) = snapshot[i];
                 Environment.SetEnvironmentVariable(Name, Value);
             }
         }

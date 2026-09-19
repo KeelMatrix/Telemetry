@@ -43,27 +43,31 @@ public sealed class RuntimeInfoCiDetectionTests {
         ];
 
         public static EnvVarScope Clean(params (string Name, string? Value)[] changes) {
-            // Clear all vars first to avoid test pollution from the host environment.
-            var allChanges = new List<(string Name, string? Value)>(KnownCiDetectVars.Length + changes.Length);
-            foreach (var n in KnownCiDetectVars) allChanges.Add((n, null));
-            allChanges.AddRange(changes);
-            return new EnvVarScope([.. allChanges]);
+            return new EnvVarScope(changes);
         }
 
         private readonly (string Name, string? Value)[] saved;
 
         public EnvVarScope(params (string Name, string? Value)[] changes) {
-            saved = new (string, string?)[changes.Length];
+            var names = KnownCiDetectVars
+                .Concat(changes.Select(change => change.Name))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            saved = new (string, string?)[names.Length];
 
-            for (var i = 0; i < changes.Length; i++) {
-                var (name, value) = changes[i];
+            for (var i = 0; i < names.Length; i++) {
+                var name = names[i];
                 saved[i] = (name, Environment.GetEnvironmentVariable(name));
-                Environment.SetEnvironmentVariable(name, value);
             }
+
+            foreach (var name in KnownCiDetectVars)
+                Environment.SetEnvironmentVariable(name, null);
+            foreach (var (name, value) in changes)
+                Environment.SetEnvironmentVariable(name, value);
         }
 
         public void Dispose() {
-            for (var i = 0; i < saved.Length; i++) {
+            for (var i = saved.Length - 1; i >= 0; i--) {
                 var (name, value) = saved[i];
                 Environment.SetEnvironmentVariable(name, value);
             }

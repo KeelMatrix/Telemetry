@@ -250,7 +250,7 @@ public sealed class ProjectIdentityProviderIntegrationTests : IDisposable {
     }
 
     private static string CreateToolName(string prefix) {
-        return $"PROJECTIDENTITY_{prefix}_{Guid.NewGuid():N}";
+        return $"PI_{prefix}_{Guid.NewGuid():N}"[..20];
     }
 
     private static void TryDeleteDirectory(string dir) {
@@ -296,27 +296,30 @@ public sealed class ProjectIdentityProviderIntegrationTests : IDisposable {
         private readonly (string Name, string? Value)[] saved;
 
         public static TestEnvironmentScope Clean(params (string Name, string? Value)[] changes) {
-            var allChanges = new List<(string Name, string? Value)>(KnownVars.Length + changes.Length);
-            foreach (var name in KnownVars) {
-                allChanges.Add((name, null));
-            }
-
-            allChanges.AddRange(changes);
-            return new TestEnvironmentScope([.. allChanges]);
+            return new TestEnvironmentScope(changes);
         }
 
         private TestEnvironmentScope(params (string Name, string? Value)[] changes) {
-            saved = new (string, string?)[changes.Length];
+            var names = KnownVars
+                .Concat(changes.Select(change => change.Name))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            saved = new (string, string?)[names.Length];
 
-            for (var i = 0; i < changes.Length; i++) {
-                var (name, value) = changes[i];
+            for (var i = 0; i < names.Length; i++) {
+                var name = names[i];
                 saved[i] = (name, Environment.GetEnvironmentVariable(name));
-                Environment.SetEnvironmentVariable(name, value);
             }
+
+            foreach (var name in KnownVars)
+                Environment.SetEnvironmentVariable(name, null);
+            foreach (var (name, value) in changes)
+                Environment.SetEnvironmentVariable(name, value);
         }
 
         public void Dispose() {
-            foreach (var (name, value) in saved) {
+            for (var i = saved.Length - 1; i >= 0; i--) {
+                var (name, value) = saved[i];
                 Environment.SetEnvironmentVariable(name, value);
             }
         }

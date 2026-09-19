@@ -43,8 +43,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         Environment.SetEnvironmentVariable("KEELMATRIX_NO_TELEMETRY", "1");
 
         using var worker = harness.CreateWorker();
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
-        await Task.Delay(250);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Sender.Received.Count.Should().Be(0);
         File.Exists(backlogPath).Should().BeTrue();
@@ -64,8 +65,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         using var harness = new WorkerHarness();
         using var worker = harness.CreateWorker();
 
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
-        await Task.Delay(300);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Sender.Received.Should().BeEmpty();
         Directory.Exists(harness.PendingDir).Should().BeFalse();
@@ -87,11 +89,12 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         await WaitUntilAsync(() => Volatile.Read(ref calls) == 1, TimeSpan.FromSeconds(5));
 
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
         worker.RequestHeartbeat();
         worker.RequestActivation();
 
-        await Task.Delay(300);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         calls.Should().Be(1);
     }
@@ -117,9 +120,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         File.WriteAllText(harness.PendingDir, "blocked");
 
         using var worker = harness.CreateWorker();
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
-
-        await Task.Delay(300);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.CountMarkerFiles("activation.*.json").Should().Be(0);
         harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
@@ -137,9 +140,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         File.WriteAllText(harness.PendingDir, "blocked");
 
         using var worker = harness.CreateWorker();
+        var cycle = worker.CompletedTestCycle;
         worker.RequestHeartbeat();
-
-        await Task.Delay(300);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
 
@@ -158,8 +161,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         Directory.Delete(harness.PendingDir);
         File.WriteAllText(harness.PendingDir, "blocked");
 
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
-        await Task.Delay(300);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.CountMarkerFiles("activation.*.json").Should().Be(0);
         harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
@@ -175,18 +179,20 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         using var harness = new WorkerHarness();
         using var worker = harness.CreateWorker();
 
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
         worker.RequestHeartbeat();
 
         await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
-        await Task.Delay(250);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         var events = harness.Sender.Received.Select(r => r.Event).ToList();
         events.Should().Contain("activation");
         events.Should().NotContain("heartbeat", "activation should suppress heartbeat for the same week");
 
+        cycle = worker.CompletedTestCycle;
         worker.RequestHeartbeat();
-        await Task.Delay(250);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Sender.Received.Select(r => r.Event).Should().NotContain("heartbeat");
     }
@@ -273,10 +279,11 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         harness.RuntimeInfo.SetCiOverrideForTests(false);
         using var worker = harness.CreateWorker();
 
+        var cycle = worker.CompletedTestCycle;
         worker.RequestActivation();
         worker.RequestHeartbeat();
 
-        await Task.Delay(300);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Sender.Received.Should().BeEmpty();
         harness.CountMarkerFiles("activation.*.json").Should().Be(0);
@@ -323,7 +330,6 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         await WaitUntilAsync(
             () => Directory.Exists(harness.PendingDir) && Directory.EnumerateFiles(harness.PendingDir, "*.json").Count() == 1,
             TimeSpan.FromSeconds(5));
-        await Task.Delay(150);
 
         sender.Received.Should().ContainSingle();
         var pending = Directory.EnumerateFiles(harness.PendingDir, "*.json").Single();
@@ -420,7 +426,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             Sender = new RecordingTelemetrySender();
             telemetrySender = sender ?? Sender;
 
-            var toolNameUpper = "INTEGRATIONTEST_WORKER_" + Guid.NewGuid().ToString("N");
+            var toolNameUpper = "ITW_" + Guid.NewGuid().ToString("N")[..12];
             RuntimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryDeliveryWorkerIntegrationTests));
             RuntimeInfo = new RuntimeInfo();
 
@@ -494,7 +500,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         }
 
         public void Dispose() {
-            foreach (var kv in snapshot) {
+            var entries = snapshot.ToArray();
+            for (var i = entries.Length - 1; i >= 0; i--) {
+                var kv = entries[i];
                 try { Environment.SetEnvironmentVariable(kv.Key, kv.Value); }
                 catch { /* swallow */ }
             }

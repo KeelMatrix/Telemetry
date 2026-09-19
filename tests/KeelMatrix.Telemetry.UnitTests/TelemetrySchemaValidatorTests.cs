@@ -106,6 +106,26 @@ public sealed class TelemetrySchemaValidatorTests {
     }
 
     [Theory]
+    [InlineData("tool name")]
+    [InlineData("tool/name")]
+    [InlineData("_tool")]
+    public void IsValid_ReturnsFalse_WhenToolViolatesWorkerGrammar(string toolName) {
+        var runtimeContext = CreateRuntimeContext("valid_tool");
+        var evt = CreateActivation(runtimeContext, tool: toolName);
+
+        TelemetrySchemaValidator.IsValid(evt, toolName).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsValid_ReturnsFalse_WhenToolExceedsWorkerLength() {
+        var toolName = "t" + new string('o', TelemetryConfig.ToolMaxLength);
+        var runtimeContext = CreateRuntimeContext(toolName);
+        var evt = CreateActivation(runtimeContext);
+
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
+    }
+
+    [Theory]
     [MemberData(nameof(GetTooLongRuntimeOrOsCases))]
     public void Activation_Rejects_RuntimeOrOsTooLong(string runtime, string os) {
         var runtimeContext = CreateRuntimeContext("runtime_os_caps");
@@ -151,6 +171,7 @@ public sealed class TelemetrySchemaValidatorTests {
     [InlineData("2026-09")]     // missing 'W'
     [InlineData("W09-2026")]    // wrong order
     [InlineData("2026-WAA")]    // non-numeric
+    [InlineData("2021-W53")]    // 2021 has only 52 ISO weeks
     [InlineData("")]            // empty
     public void Heartbeat_Rejects_NonIsoWeekFormat(string week) {
         var runtimeContext = CreateRuntimeContext("week_format");
@@ -165,6 +186,24 @@ public sealed class TelemetrySchemaValidatorTests {
             week: week);
 
         TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("2020-W53")]
+    [InlineData("2021-W01")]
+    [InlineData("2026-W53")]
+    public void Heartbeat_AcceptsValidIsoWeekBoundaries(string week) {
+        var runtimeContext = CreateRuntimeContext("week_boundary");
+        var evt = new HeartbeatEvent(
+            runtimeContext.ToolName,
+            runtimeContext.ToolVersion,
+            "1.0.0",
+            TelemetryConfig.SchemaVersion,
+            "abc",
+            "def",
+            week);
+
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeTrue();
     }
 
     private static TelemetryRuntimeContext CreateRuntimeContext(string toolNameUpper) {

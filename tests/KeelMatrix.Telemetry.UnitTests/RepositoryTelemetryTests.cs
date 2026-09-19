@@ -5,15 +5,11 @@ using FluentAssertions;
 namespace KeelMatrix.Telemetry.UnitTests;
 
 [Collection(TelemetryConfigTestsCollectionDefinition.Name)]
-public sealed class RepositoryTelemetryTests : IDisposable {
+public sealed class RepositoryTelemetryTests {
     private const string EnvKeelMatrixNoTelemetry = "KEELMATRIX_NO_TELEMETRY";
     private const string EnvDotNetCliTelemetryOptOut = "DOTNET_CLI_TELEMETRY_OPTOUT";
     private const string EnvDoNotTrack = "DO_NOT_TRACK";
     private static readonly string SharedTempRoot = CreateSharedTempRoot();
-
-    public void Dispose() {
-        ClearOptOutVars();
-    }
 
     [Fact]
     public void TryResolveRepositoryRoot_ReturnsGitRoot_FromExplicitStartingDirectory() {
@@ -168,8 +164,10 @@ public sealed class RepositoryTelemetryTests : IDisposable {
         }
 
         public void Dispose() {
-            foreach (var (name, value) in snapshot)
+            for (var i = snapshot.Length - 1; i >= 0; i--) {
+                var (name, value) = snapshot[i];
                 Environment.SetEnvironmentVariable(name, value);
+            }
         }
     }
 

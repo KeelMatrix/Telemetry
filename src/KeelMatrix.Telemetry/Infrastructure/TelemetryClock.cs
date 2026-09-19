@@ -9,8 +9,11 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// Computes the current ISO week string (YYYY-Www).
         /// </summary>
         internal static string GetCurrentIsoWeek() {
-            // Use date component only; ISO week is date-based, not time-of-day-based.
-            var date = DateTimeOffset.UtcNow.UtcDateTime.Date;
+            return GetIsoWeek(DateTimeOffset.UtcNow.UtcDateTime);
+        }
+
+        internal static string GetIsoWeek(DateTime utcDate) {
+            var date = utcDate.Date;
 
 #if NET8_0_OR_GREATER
             int isoYear = System.Globalization.ISOWeek.GetYear(date);

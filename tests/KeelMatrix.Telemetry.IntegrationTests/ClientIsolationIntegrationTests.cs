@@ -25,6 +25,7 @@ public sealed class ClientIsolationIntegrationTests {
         var secondWorker = ClientHarness.GetWorker(secondClient);
 
         firstWorker.Should().BeSameAs(secondWorker);
+        var cycle = firstWorker.CompletedTestCycle;
 
         var rootDir = ClientHarness.GetRootDirectory(firstWorker);
 
@@ -33,7 +34,7 @@ public sealed class ClientIsolationIntegrationTests {
 
         await WaitUntilAsync(() => harness.Server.CountEvents("activation") >= 1, TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => CountFiles(Path.Combine(rootDir, "markers"), "activation.*.json") == 1, TimeSpan.FromSeconds(5));
-        await Task.Delay(250);
+        await firstWorker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Server.CountEvents("activation").Should().Be(1);
         CountFiles(Path.Combine(rootDir, "markers"), "activation.*.json").Should().Be(1);
@@ -58,6 +59,8 @@ public sealed class ClientIsolationIntegrationTests {
         var secondRootDir = ClientHarness.GetRootDirectory(secondWorker);
 
         firstRootDir.Should().NotBe(secondRootDir);
+        var firstCycle = firstWorker.CompletedTestCycle;
+        var secondCycle = secondWorker.CompletedTestCycle;
 
         firstClient.TrackActivation();
         secondClient.TrackActivation();
@@ -65,6 +68,8 @@ public sealed class ClientIsolationIntegrationTests {
         await WaitUntilAsync(() => harness.Server.CountEvents("activation") >= 2, TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => CountFiles(Path.Combine(firstRootDir, "markers"), "activation.*.json") == 1, TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => CountFiles(Path.Combine(secondRootDir, "markers"), "activation.*.json") == 1, TimeSpan.FromSeconds(5));
+        await firstWorker.WaitForTestCycleAsync(firstCycle).WaitAsync(TimeSpan.FromSeconds(5));
+        await secondWorker.WaitForTestCycleAsync(secondCycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         var emittedTools = harness.Server.Received
             .Where(request => request.Event == "activation")
@@ -86,6 +91,7 @@ public sealed class ClientIsolationIntegrationTests {
         var client = harness.CreateClient(toolNameUpper);
         var worker = ClientHarness.GetWorker(client);
         var rootDir = ClientHarness.GetRootDirectory(worker);
+        var cycle = worker.CompletedTestCycle;
 
         var calls = Enumerable.Range(0, 64)
             .Select(_ => Task.Run(() => {
@@ -108,7 +114,7 @@ public sealed class ClientIsolationIntegrationTests {
         await WaitUntilAsync(() => CountFiles(markersDir, $"heartbeat.*.{TelemetryClock.GetCurrentIsoWeek()}.json") == 1, TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => harness.Server.CountEvents("activation") >= 1, TimeSpan.FromSeconds(5));
         await WaitUntilAsync(() => CountQueueFiles(queueDir) == 0, TimeSpan.FromSeconds(5));
-        await Task.Delay(250);
+        await worker.WaitForTestCycleAsync(cycle).WaitAsync(TimeSpan.FromSeconds(5));
 
         CountFiles(markersDir, "activation.*.json").Should().Be(1);
         CountFiles(markersDir, $"heartbeat.*.{TelemetryClock.GetCurrentIsoWeek()}.json").Should().Be(1);
@@ -161,7 +167,7 @@ public sealed class ClientIsolationIntegrationTests {
         public LocalTelemetryServer Server { get; }
 
         public static string CreateToolName(string prefix) {
-            return $"CLIENT_{prefix}_{Guid.NewGuid():N}";
+            return $"CI_{prefix}_{Guid.NewGuid():N}"[..20];
         }
 
         public Client CreateClient(string toolNameUpper) {
@@ -253,8 +259,10 @@ public sealed class ClientIsolationIntegrationTests {
         }
 
         public void Dispose() {
-            foreach (var (name, value) in snapshot)
+            for (var i = snapshot.Length - 1; i >= 0; i--) {
+                var (name, value) = snapshot[i];
                 Environment.SetEnvironmentVariable(name, value);
+            }
         }
     }
 

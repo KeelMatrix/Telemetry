@@ -50,6 +50,7 @@ namespace KeelMatrix.Telemetry {
 
         internal const int SchemaVersion = 1;
         internal const int MaxPayloadBytes = 768;
+        internal const int ToolMaxLength = 32;
         internal const int RuntimeMaxLength = 32;
         internal const int ToolVersionMaxLength = 16;
         internal const int ProjectHashMaxLength = 64;

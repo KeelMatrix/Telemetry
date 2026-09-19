@@ -11,8 +11,8 @@ internal static class TelemetrySerializerContractTestData {
     internal const string Tool = "fixture_tool";
     internal const string ToolVersion = "2.3.4";
     internal const string TelemetryVersion = "9.8.7";
-    internal const string ProjectHash = "project_hash_123";
-    internal const string InstallationHash = "installation_hash_456";
+    internal const string ProjectHash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    internal const string InstallationHash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
     internal const string Runtime = "dotnet";
     internal const string Os = "windows";
     internal const string Timestamp = "2026-02-27T00:00:00Z";
@@ -52,10 +52,10 @@ internal static class TelemetrySerializerContractTestData {
     ];
 
     internal const string ExpectedActivationJson =
-        "{\"runtime\":\"dotnet\",\"os\":\"windows\",\"ci\":true,\"timestamp\":\"2026-02-27T00:00:00Z\",\"event\":\"activation\",\"tool\":\"fixture_tool\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"project_hash_123\",\"installation_hash\":\"installation_hash_456\"}";
+        "{\"runtime\":\"dotnet\",\"os\":\"windows\",\"ci\":false,\"timestamp\":\"2026-02-27T00:00:00Z\",\"event\":\"activation\",\"tool\":\"fixture_tool\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"installation_hash\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"}";
 
     internal const string ExpectedHeartbeatJson =
-        "{\"week\":\"2026-W09\",\"event\":\"heartbeat\",\"tool\":\"fixture_tool\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"project_hash_123\",\"installation_hash\":\"installation_hash_456\"}";
+        "{\"week\":\"2026-W09\",\"event\":\"heartbeat\",\"tool\":\"fixture_tool\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"installation_hash\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"}";
 
     internal static ActivationEvent CreateActivation() {
         return new ActivationEvent(
@@ -67,7 +67,7 @@ internal static class TelemetrySerializerContractTestData {
             installationHash: InstallationHash,
             runtime: Runtime,
             os: Os,
-            ci: true,
+            ci: false,
             timestamp: Timestamp);
     }
 

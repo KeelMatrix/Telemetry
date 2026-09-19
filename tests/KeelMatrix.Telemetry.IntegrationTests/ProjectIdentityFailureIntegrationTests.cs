@@ -18,7 +18,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
 
         clientScope.Client.TrackActivation();
 
-        await Task.Delay(300);
+        await harness.IdentityResolutionAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Server.Received.Should().BeEmpty();
         harness.CountQueueFiles().Should().Be(0);
@@ -34,7 +34,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
 
         clientScope.Client.TrackHeartbeat();
 
-        await Task.Delay(300);
+        await harness.IdentityResolutionAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Server.Received.Should().BeEmpty();
         harness.CountQueueFiles().Should().Be(0);
@@ -54,7 +54,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         using var clientScope = harness.CreateClientScope();
         clientScope.Client.TrackActivation();
 
-        await Task.Delay(300);
+        await harness.IdentityResolutionAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         harness.Server.Received.Should().BeEmpty();
         harness.CountQueueFiles().Should().Be(1);
@@ -78,7 +78,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
             Server = new LocalTelemetryServer();
             TelemetryConfig.SetUrlOverrideForTests(Server.BaseUri);
 
-            toolNameUpper = "BROKENIDENTITY_" + Guid.NewGuid().ToString("N");
+            toolNameUpper = "BI_" + Guid.NewGuid().ToString("N")[..12];
             RuntimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(ProjectIdentityFailureIntegrationTests));
             RuntimeInfo = new RuntimeInfo();
             RuntimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
@@ -87,6 +87,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         }
 
         public LocalTelemetryServer Server { get; }
+        public TaskCompletionSource<bool> IdentityResolutionAttempted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TelemetryRuntimeContext RuntimeContext { get; }
         public RuntimeInfo RuntimeInfo { get; }
 #pragma warning disable S2325 // Methods and properties that don't access instance data should be static
@@ -105,7 +106,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
             var client = new Client(
                 toolNameUpper,
                 typeof(ProjectIdentityFailureIntegrationTests),
-                (_, _) => new ThrowingProjectIdentityProvider());
+                (_, _) => new ThrowingProjectIdentityProvider(IdentityResolutionAttempted));
 
             return new ClientScope(client);
         }
@@ -169,7 +170,14 @@ public sealed class ProjectIdentityFailureIntegrationTests {
     }
 
     private sealed class ThrowingProjectIdentityProvider : IProjectIdentityProvider {
+        private readonly TaskCompletionSource<bool> attempted;
+
+        public ThrowingProjectIdentityProvider(TaskCompletionSource<bool> attempted) {
+            this.attempted = attempted;
+        }
+
         public ResolvedTelemetryIdentity EnsureResolvedOnWorkerThread() {
+            attempted.TrySetResult(true);
             throw new IOException("Simulated project identity failure.");
         }
     }
@@ -190,7 +198,9 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         }
 
         public void Dispose() {
-            foreach (var kv in snapshot) {
+            var entries = snapshot.ToArray();
+            for (var i = entries.Length - 1; i >= 0; i--) {
+                var kv = entries[i];
                 try { Environment.SetEnvironmentVariable(kv.Key, kv.Value); }
                 catch { /* swallow */ }
             }

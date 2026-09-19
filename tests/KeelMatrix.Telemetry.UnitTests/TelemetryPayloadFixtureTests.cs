@@ -34,4 +34,21 @@ public sealed class TelemetryPayloadFixtureTests {
 
         canonicalJson.Should().Be(TelemetrySerializerContractTestData.ExpectedHeartbeatJson);
     }
+
+    [Fact]
+    public void WorkerActivationFixture_MatchesSerializerOutput() {
+        ReadWorkerFixture("activation.json")
+            .Should().Be(TelemetrySerializerContractTestData.SerializeActivationJson());
+    }
+
+    [Fact]
+    public void WorkerHeartbeatFixture_MatchesSerializerOutput() {
+        ReadWorkerFixture("heartbeat.json")
+            .Should().Be(TelemetrySerializerContractTestData.SerializeHeartbeatJson());
+    }
+
+    private static string ReadWorkerFixture(string fileName) {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", fileName);
+        return File.ReadAllText(path).TrimEnd('\r', '\n');
+    }
 }

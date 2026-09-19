@@ -1,6 +1,10 @@
 // Copyright (c) KeelMatrix
 
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using System.Reflection;
+using System.Text;
 using FluentAssertions;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;
@@ -19,6 +23,8 @@ public sealed class ClientEndToEndIntegrationTests {
     [Fact]
     public void Client_UsesNullTelemetryClient_WhenOptOutEnabled() {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
+        using var server = new LocalTelemetryServer();
+        using var urlOverride = new TelemetryUrlOverrideScope(server.BaseUri);
 
         Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, "1");
         Environment.SetEnvironmentVariable(EnvDotNetCliTelemetryOptOut, null);
@@ -29,6 +35,7 @@ public sealed class ClientEndToEndIntegrationTests {
         var inner = GetInnerTelemetryClient(client);
         inner.Should().NotBeNull();
         inner!.GetType().Name.Should().Be("NullTelemetryClient");
+        server.Received.Should().BeEmpty();
     }
 
     [Fact]
@@ -36,6 +43,8 @@ public sealed class ClientEndToEndIntegrationTests {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
 
+        using var server = new LocalTelemetryServer();
+        using var urlOverride = new TelemetryUrlOverrideScope(server.BaseUri);
         using var runtime = IsolatedRuntime.Create();
         using var clientScope = new ClientScope(runtime.ToolNameUpper);
 
@@ -54,6 +63,8 @@ public sealed class ClientEndToEndIntegrationTests {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
 
+        using var server = new LocalTelemetryServer();
+        using var urlOverride = new TelemetryUrlOverrideScope(server.BaseUri);
         using var runtime = IsolatedRuntime.Create();
         using var clientScope = new ClientScope(runtime.ToolNameUpper);
 
@@ -91,7 +102,8 @@ public sealed class ClientEndToEndIntegrationTests {
         }
 
         public void Dispose() {
-            foreach (var (Name, Value) in snapshot) {
+            for (var i = snapshot.Length - 1; i >= 0; i--) {
+                var (Name, Value) = snapshot[i];
                 Environment.SetEnvironmentVariable(Name, Value);
             }
         }
@@ -103,7 +115,7 @@ public sealed class ClientEndToEndIntegrationTests {
 
         public static IsolatedRuntime Create() {
             // ToolNameUpper becomes part of the per-user telemetry root: "KeelMatrix/{ToolNameUpper}".
-            var toolNameUpper = "INTEGRATIONTEST_" + Guid.NewGuid().ToString("N");
+            var toolNameUpper = "IT_" + Guid.NewGuid().ToString("N")[..12];
             return new IsolatedRuntime { ToolNameUpper = toolNameUpper };
         }
 
@@ -133,6 +145,77 @@ public sealed class ClientEndToEndIntegrationTests {
 
         public void Dispose() {
             TestCleanup.DisposeCachedWorkerForTool(ToolNameUpper, typeof(ClientEndToEndIntegrationTests));
+        }
+    }
+
+    private sealed class TelemetryUrlOverrideScope : IDisposable {
+        public TelemetryUrlOverrideScope(Uri uri) {
+            TelemetryConfig.SetUrlOverrideForTests(uri);
+        }
+
+        public void Dispose() {
+            TelemetryConfig.SetUrlOverrideForTests(null);
+        }
+    }
+
+    private sealed class LocalTelemetryServer : IDisposable {
+        private readonly HttpListener listener;
+        private readonly CancellationTokenSource cts = new();
+        private readonly Task loop;
+
+        public LocalTelemetryServer() {
+            var portListener = new TcpListener(IPAddress.Loopback, 0);
+            portListener.Start();
+            var port = ((IPEndPoint)portListener.LocalEndpoint).Port;
+            portListener.Stop();
+
+            var prefix = $"http://127.0.0.1:{port}/";
+            BaseUri = new Uri(prefix, UriKind.Absolute);
+            listener = new HttpListener();
+            listener.Prefixes.Add(prefix);
+            listener.Start();
+            loop = Task.Run(AcceptLoopAsync);
+        }
+
+        public Uri BaseUri { get; }
+        public ConcurrentQueue<string> Received { get; } = new();
+
+        private async Task AcceptLoopAsync() {
+            while (!cts.IsCancellationRequested) {
+                HttpListenerContext? context;
+                try {
+                    context = await listener.GetContextAsync().ConfigureAwait(false);
+                }
+                catch {
+                    if (cts.IsCancellationRequested)
+                        return;
+
+                    continue;
+                }
+
+                try {
+                    using var reader = new StreamReader(context.Request.InputStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true, leaveOpen: false);
+                    Received.Enqueue(await reader.ReadToEndAsync().ConfigureAwait(false));
+                    context.Response.StatusCode = (int)HttpStatusCode.OK;
+                    var bytes = Encoding.UTF8.GetBytes("ok");
+                    await context.Response.OutputStream.WriteAsync(bytes).ConfigureAwait(false);
+                }
+                catch {
+                    // Test transport is best effort during teardown.
+                }
+                finally {
+                    try { context.Response.OutputStream.Close(); } catch { }
+                    try { context.Response.Close(); } catch { }
+                }
+            }
+        }
+
+        public void Dispose() {
+            try { cts.Cancel(); } catch { }
+            try { listener.Stop(); } catch { }
+            try { listener.Close(); } catch { }
+            try { loop.GetAwaiter().GetResult(); } catch { }
+            cts.Dispose();
         }
     }
 }

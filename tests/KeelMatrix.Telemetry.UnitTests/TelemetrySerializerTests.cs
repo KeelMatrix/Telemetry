@@ -1,7 +1,6 @@
 // Copyright (c) KeelMatrix
 
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using KeelMatrix.Telemetry.Events;
@@ -75,23 +74,12 @@ public sealed class TelemetrySerializerTests {
     }
 
     [Fact]
-    public void Serialize_AllowsExactlyMaxPayloadBytes() {
-        // Find a tool name length that produces exactly MaxPayloadBytes.
-        // ToolNameUpper is preserved in payload (lowercased), so length changes payload size 1:1 in UTF-8.
-        var toolUpper = FindToolNameUpperProducingExactPayloadBytes(TelemetryConfig.MaxPayloadBytes);
-
+    public void Serialize_ReturnsNull_WhenToolNameExceedsWorkerLimit() {
+        var toolUpper = "TOOL_" + new string('A', TelemetryConfig.ToolMaxLength);
         var runtimeContext = CreateRuntimeContext(toolUpper);
         var evt = CreateActivation(runtimeContext);
 
-        var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
-        json.Should().NotBeNull();
-        Encoding.UTF8.GetByteCount(json!).Should().Be(TelemetryConfig.MaxPayloadBytes);
-
-        // Boundary +1 should be rejected.
-        var toolUpperPlusOne = toolUpper + "A";
-        var runtimeContextPlusOne = CreateRuntimeContext(toolUpperPlusOne);
-        var evtPlusOne = CreateActivation(runtimeContextPlusOne);
-        TelemetrySerializer.Serialize(evtPlusOne, runtimeContextPlusOne.ToolName).Should().BeNull();
+        TelemetrySerializer.Serialize(evt, runtimeContext.ToolName).Should().BeNull();
     }
 
     [Fact]
@@ -101,8 +89,8 @@ public sealed class TelemetrySerializerTests {
             runtimeContext,
             toolVersion: "2.3.4",
             telemetryVersion: "9.8.7",
-            projectHash: "projecthash123",
-            installationHash: "installhash456",
+            projectHash: TelemetrySerializerContractTestData.ProjectHash,
+            installationHash: TelemetrySerializerContractTestData.InstallationHash,
             runtime: "dotnet",
             os: "windows",
             ci: true,
@@ -111,7 +99,7 @@ public sealed class TelemetrySerializerTests {
         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
 
         json.Should().Be(
-            "{\"runtime\":\"dotnet\",\"os\":\"windows\",\"ci\":true,\"timestamp\":\"2026-02-27T00:00:00Z\",\"event\":\"activation\",\"tool\":\"serializer_snapshot_activation\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"projecthash123\",\"installation_hash\":\"installhash456\"}");
+            "{\"runtime\":\"dotnet\",\"os\":\"windows\",\"ci\":true,\"timestamp\":\"2026-02-27T00:00:00Z\",\"event\":\"activation\",\"tool\":\"serializer_snapshot_activation\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"installation_hash\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"}");
     }
 
     [Fact]
@@ -121,14 +109,14 @@ public sealed class TelemetrySerializerTests {
             runtimeContext,
             toolVersion: "2.3.4",
             telemetryVersion: "9.8.7",
-            projectHash: "projecthash123",
-            installationHash: "installhash456",
+            projectHash: TelemetrySerializerContractTestData.ProjectHash,
+            installationHash: TelemetrySerializerContractTestData.InstallationHash,
             week: "2026-W09");
 
         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
 
         json.Should().Be(
-            "{\"week\":\"2026-W09\",\"event\":\"heartbeat\",\"tool\":\"serializer_snapshot_heartbeat\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"projecthash123\",\"installation_hash\":\"installhash456\"}");
+            "{\"week\":\"2026-W09\",\"event\":\"heartbeat\",\"tool\":\"serializer_snapshot_heartbeat\",\"tool_version\":\"2.3.4\",\"telemetry_version\":\"9.8.7\",\"schema_version\":1,\"project_hash\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"installation_hash\":\"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789\"}");
     }
 
     private static TelemetryRuntimeContext CreateRuntimeContext(string toolNameUpper) {
@@ -179,29 +167,4 @@ public sealed class TelemetrySerializerTests {
             week: week ?? "2026-W09");
     }
 
-    private static string FindToolNameUpperProducingExactPayloadBytes(int targetBytes) {
-        // Use a stable prefix to make debugging easier.
-        const string prefix = "UNITTEST_PAYLOAD_";
-
-        for (int padLen = 0; padLen <= 4096; padLen++) {
-            var toolUpper = prefix + new string('A', padLen);
-            var runtimeContext = CreateRuntimeContext(toolUpper);
-
-            var evt = CreateActivation(runtimeContext);
-            var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
-
-            if (json is null)
-                continue;
-
-            var bytes = Encoding.UTF8.GetByteCount(json);
-            if (bytes == targetBytes)
-                return toolUpper;
-
-            // Once we pass the target (without hitting it), something is off; fail fast.
-            if (bytes > targetBytes)
-                break;
-        }
-
-        throw new InvalidOperationException($"Could not produce a payload of exactly {targetBytes} bytes.");
-    }
 }

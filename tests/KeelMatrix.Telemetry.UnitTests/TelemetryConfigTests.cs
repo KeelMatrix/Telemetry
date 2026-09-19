@@ -427,7 +427,7 @@ public sealed class TelemetryConfigTests : IDisposable {
             return null;
         });
 
-        var client = new Client("UNITTEST_" + Guid.NewGuid().ToString("N"), typeof(TelemetryConfigTests));
+        var client = new Client("UT_" + Guid.NewGuid().ToString("N")[..12], typeof(TelemetryConfigTests));
         try {
             client.TrackActivation();
 
@@ -441,7 +441,7 @@ public sealed class TelemetryConfigTests : IDisposable {
 
     [Fact]
     public void RuntimeContext_SetsToolNameLowercase_AndKeepsRootDirectoryUnresolvedUntilWorkerThread() {
-        var toolNameUpper = "UNITTEST_" + Guid.NewGuid().ToString("N");
+        var toolNameUpper = "UT_" + Guid.NewGuid().ToString("N")[..12];
 
         var runtimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryConfigTests));
 
@@ -454,7 +454,7 @@ public sealed class TelemetryConfigTests : IDisposable {
 
     [Fact]
     public void RuntimeContext_EnsureRootDirectoryResolvedOnWorkerThread_ProducesRootedPath() {
-        var toolNameUpper = "UNITTEST_" + Guid.NewGuid().ToString("N");
+        var toolNameUpper = "UT_" + Guid.NewGuid().ToString("N")[..12];
 
         var runtimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryConfigTests));
 
@@ -539,7 +539,8 @@ public sealed class TelemetryConfigTests : IDisposable {
         }
 
         public void Dispose() {
-            foreach (var (Name, Value) in snapshot) {
+            for (var i = snapshot.Length - 1; i >= 0; i--) {
+                var (Name, Value) = snapshot[i];
                 Environment.SetEnvironmentVariable(Name, Value);
             }
         }
