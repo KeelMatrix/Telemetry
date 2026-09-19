@@ -119,9 +119,11 @@ $expectedPackages = @(
     "KeelMatrix.Telemetry.$Version.nupkg",
     "KeelMatrix.Telemetry.$Version.snupkg"
 )
-$actualFiles = @(Get-ChildItem -LiteralPath $packageRoot -File | Select-Object -ExpandProperty Name)
-$unexpectedFiles = @($actualFiles | Where-Object { $_ -notin $expectedPackages })
-Assert-Condition ($unexpectedFiles.Count -eq 0) "Unexpected files in the package directory: $($unexpectedFiles -join ', ')."
+$actualEntries = @(Get-ChildItem -LiteralPath $packageRoot -Force -Recurse)
+$unexpectedEntries = @($actualEntries | ForEach-Object {
+        [IO.Path]::GetRelativePath($packageRoot, $_.FullName).Replace('\', '/')
+    } | Where-Object { $_ -notin $expectedPackages })
+Assert-Condition ($unexpectedEntries.Count -eq 0) "Unexpected files or directories in the package directory: $($unexpectedEntries -join ', ')."
 $actualPackages = @(Get-ChildItem -LiteralPath $packageRoot -File | Where-Object { $_.Name -like '*.nupkg' -or $_.Name -like '*.snupkg' } | Select-Object -ExpandProperty Name)
 $unexpected = @($actualPackages | Where-Object { $_ -notin $expectedPackages })
 $missing = @($expectedPackages | Where-Object { $_ -notin $actualPackages })

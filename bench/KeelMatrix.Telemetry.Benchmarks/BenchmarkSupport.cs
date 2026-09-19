@@ -52,7 +52,7 @@ internal sealed class BenchmarkRuntimeScope : IDisposable {
     internal RuntimeInfo RuntimeInfo { get; }
     internal string RootDirectory { get; }
 
-    internal ITelemetryQueue CreateQueue() => DurableTelemetryQueue.CreateSafe(RuntimeContext);
+    internal ITelemetryQueue CreateQueue() => DurableTelemetryQueue.CreateSafe(RuntimeContext)!;
 
     public void Dispose() {
         BenchmarkSupport.TryDeleteDirectory(RootDirectory);
