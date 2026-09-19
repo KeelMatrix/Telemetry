@@ -13,6 +13,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private const string QueueFileTimestampFormat = "yyyyMMddHHmmssfffffff";
         private const int QueueFileTimestampLength = 21;
         private const int MaxEnvelopeBytes = 4096;
+        private const string ClaimLockSuffix = ".lock";
+        private const string PendingClaimLockSuffix = ".claiming.lock";
 
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly string pendingDir;
@@ -52,7 +54,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 return;
             }
 
-            var nowUtc = DateTime.UtcNow;
+            var nowUtc = TelemetryClock.UtcNow;
             foreach (var file in files) {
                 try {
                     var lastWriteUtc = File.GetLastWriteTimeUtc(file);
@@ -95,12 +97,13 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
         /// <summary>
         /// Returns claims whose processing lease has expired to pending. The last-write time
-        /// is the lease heartbeat; a live claim is not reclaimed while it remains non-stale.
+        /// records when the claim was acquired; a live claim is not reclaimed while it remains
+        /// within the five-minute lease.
         /// Lease expiry can produce a duplicate delivery window, so delivery is best-effort
         /// rather than exactly-once.
         /// </summary>
         private void RecoverStaleClaims() {
-            var nowUtc = DateTime.UtcNow;
+            var nowUtc = TelemetryClock.UtcNow;
             string[] files;
 
             try {
@@ -111,6 +114,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             }
 
             foreach (var file in files) {
+                FileStream? claimLock = null;
+                var moved = false;
                 try {
                     // Only production-generated claim names are recoverable.
                     if (!TryParseTimestampFromFilename(file, out _, out _))
@@ -138,9 +143,34 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     if (File.Exists(target))
                         continue;
 
+                    // Claim terminal operations and stale recovery are conditional on the
+                    // same generation marker. A live terminal operation wins the race, or
+                    // recovery wins it; the loser must not touch a later claim.
+                    var claimLockPath = GetClaimLockPath(file);
+                    if (File.Exists(claimLockPath)) {
+                        try {
+                            claimLock = new FileStream(
+                                claimLockPath,
+                                FileMode.Open,
+                                FileAccess.ReadWrite,
+                                FileShare.None);
+                        }
+                        catch {
+                            continue;
+                        }
+                    }
+
                     File.Move(file, target);
+                    moved = true;
                 }
                 catch { /* swallow */ }
+                finally {
+                    try { claimLock?.Dispose(); }
+                    catch { /* swallow */ }
+
+                    if (moved)
+                        SafeDelete(GetClaimLockPath(file));
+                }
             }
         }
 
@@ -191,19 +221,37 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         break;
 
                     var name = Path.GetFileName(file);
-                    var claimedPath = Path.Combine(processingDir, name);
+                    var claimedPath = Path.Combine(processingDir, CreateClaimedFileName(name));
+                    FileStream? pendingClaimLock = null;
+                    var ownsPendingClaimLock = false;
 
                     try {
+                        if (!TryAcquirePendingClaimLock(file, out pendingClaimLock))
+                            continue;
+                        ownsPendingClaimLock = true;
+
                         File.Move(file, claimedPath);
-                        try { File.SetLastWriteTimeUtc(claimedPath, DateTime.UtcNow); }
+                        try { File.SetLastWriteTimeUtc(claimedPath, TelemetryClock.UtcNow); }
                         catch { /* swallow */ }
                     }
                     catch {
                         continue; // another process claimed it
                     }
+                    finally {
+                        try { pendingClaimLock?.Dispose(); }
+                        catch { /* swallow */ }
+                        if (ownsPendingClaimLock)
+                            SafeDelete(GetPendingClaimLockPath(file));
+                    }
+
+                    if (!TryCreateClaimLock(claimedPath)) {
+                        TryMoveClaimBackToPending(claimedPath, file);
+                        continue;
+                    }
 
                     if (!TryReadBoundedText(claimedPath, MaxEnvelopeBytes, out var json)) {
                         SafeDelete(claimedPath);
+                        SafeDelete(GetClaimLockPath(claimedPath));
                         continue;
                     }
 
@@ -213,12 +261,14 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     }
                     catch {
                         SafeDelete(claimedPath);
+                        SafeDelete(GetClaimLockPath(claimedPath));
                         continue;
                     }
 
                     if (string.IsNullOrWhiteSpace(envelope.PayloadJson) ||
                         Encoding.UTF8.GetByteCount(envelope.PayloadJson) > TelemetryConfig.MaxPayloadBytes) {
                         SafeDelete(claimedPath);
+                        SafeDelete(GetClaimLockPath(claimedPath));
                         continue;
                     }
 
@@ -236,7 +286,23 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// Permanently deletes a successfully delivered item.
         /// </summary>
         public void Complete(ClaimedItem item) {
-            SafeDelete(item.Path);
+            FileStream? claimLock = null;
+            try {
+                if (!TryAcquireClaimLock(item.Path, out claimLock))
+                    return;
+
+                SafeDelete(item.Path);
+            }
+            catch {
+                // swallow
+            }
+            finally {
+                try { claimLock?.Dispose(); }
+                catch { /* swallow */ }
+
+                if (!File.Exists(item.Path))
+                    SafeDelete(GetClaimLockPath(item.Path));
+            }
         }
 
         /// <summary>
@@ -256,12 +322,17 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         private void Requeue(ClaimedItem item, bool incrementAttempts) {
+            FileStream? claimLock = null;
+            var terminal = false;
             try {
+                if (!TryAcquireClaimLock(item.Path, out claimLock))
+                    return;
+
                 var env = item.Envelope;
 
                 // If max attempts reached, try to dead-letter; do not delete unless move succeeds.
                 if (incrementAttempts && env.Attempts + 1 >= TelemetryConfig.MaxSendAttempts) {
-                    MoveToDeadLetterBestEffort(item.Path);
+                    terminal = MoveToDeadLetterBestEffort(item.Path);
                     return;
                 }
 
@@ -286,9 +357,17 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
                 // Requeue succeeded; now safe to delete the processing item.
                 SafeDelete(item.Path);
+                terminal = true;
             }
             catch {
                 // swallow
+            }
+            finally {
+                try { claimLock?.Dispose(); }
+                catch { /* swallow */ }
+
+                if (terminal || !File.Exists(item.Path))
+                    SafeDelete(GetClaimLockPath(item.Path));
             }
         }
 
@@ -360,16 +439,110 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             }
         }
 
+        private static string CreateClaimedFileName(string pendingFileName) {
+            return string.Concat(
+                Path.GetFileNameWithoutExtension(pendingFileName),
+                ".claim.",
+                Guid.NewGuid().ToString("N"),
+                ".json");
+        }
+
+        private static string GetClaimLockPath(string claimPath) {
+            return claimPath + ClaimLockSuffix;
+        }
+
+        private static string GetPendingClaimLockPath(string pendingPath) {
+            return pendingPath + PendingClaimLockSuffix;
+        }
+
+        private static bool TryAcquirePendingClaimLock(string pendingPath, out FileStream? claimLock) {
+            claimLock = null;
+            var lockPath = GetPendingClaimLockPath(pendingPath);
+
+            for (var attempt = 0; attempt < 2; attempt++) {
+                try {
+                    claimLock = new FileStream(
+                        lockPath,
+                        FileMode.CreateNew,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+                    return true;
+                }
+                catch {
+                    // A marker left by a terminated claimant is recoverable once it is no
+                    // longer held. An active claimant keeps the marker exclusively open.
+                    try {
+                        using (new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+                        SafeDelete(lockPath);
+                    }
+                    catch {
+                        return false;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool TryCreateClaimLock(string claimPath) {
+            try {
+                using var stream = new FileStream(
+                    GetClaimLockPath(claimPath),
+                    FileMode.CreateNew,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+                return true;
+            }
+            catch {
+                return false;
+            }
+        }
+
+        private static bool TryAcquireClaimLock(string claimPath, out FileStream? claimLock) {
+            claimLock = null;
+
+            try {
+                claimLock = new FileStream(
+                    GetClaimLockPath(claimPath),
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.None);
+                return true;
+            }
+            catch {
+                try { claimLock?.Dispose(); }
+                catch { /* swallow */ }
+
+                claimLock = null;
+                return false;
+            }
+        }
+
+        private static void TryMoveClaimBackToPending(string claimPath, string pendingPath) {
+            try {
+                if (File.Exists(claimPath) && !File.Exists(pendingPath))
+                    File.Move(claimPath, pendingPath);
+            }
+            catch {
+                // Leave the claim for stale recovery if the move cannot be completed.
+            }
+            finally {
+                if (!File.Exists(claimPath))
+                    SafeDelete(GetClaimLockPath(claimPath));
+            }
+        }
+
         /// <summary>
         /// Moves a processing item to dead-letter.
         /// Never deletes the processing file unless the move succeeded.
         /// </summary>
-        private void MoveToDeadLetterBestEffort(string processingPath) {
+        private bool MoveToDeadLetterBestEffort(string processingPath) {
             try {
                 var target = Path.Combine(deadLetterDir, Path.GetFileName(processingPath));
 #if NET8_0_OR_GREATER
                 File.Move(processingPath, target, overwrite: true);
                 EnforceLimitOnDirectory(deadLetterDir, TelemetryConfig.MaxDeadLetterItems);
+                return true;
 #else
                 // netstandard2.0: best-effort overwrite emulation
                 try {
@@ -378,15 +551,18 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
                     File.Move(processingPath, target);
                     EnforceLimitOnDirectory(deadLetterDir, TelemetryConfig.MaxDeadLetterItems);
+                    return true;
                 }
                 catch {
                     // If we can't move to dead-letter, leave the processing file in place.
                     // (CrashRecovery will return it to pending on next start.)
+                    return false;
                 }
 #endif
             }
             catch {
                 // swallow
+                return false;
             }
         }
 
@@ -411,9 +587,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 if (excess <= 0)
                     return;
 
-                foreach (var file in files.Take(excess)) {
+                foreach (var file in files.Take(excess))
                     SafeDelete(file);
-                }
             }
             catch {
                 // swallow

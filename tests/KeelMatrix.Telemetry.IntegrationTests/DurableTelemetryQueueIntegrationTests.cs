@@ -1,6 +1,9 @@
 // Copyright (c) KeelMatrix
 
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
+using System.Reflection;
 using FluentAssertions;
 using KeelMatrix.Telemetry.Infrastructure;
 using KeelMatrix.Telemetry.Storage;
@@ -37,10 +40,33 @@ public sealed class DurableTelemetryQueueIntegrationTests {
 
         pendingTmp.Should().BeEmpty("tmp files must be cleaned up after atomic move");
         pendingJson.Should().HaveCount(1);
+        Directory.EnumerateFiles(runtime.PendingDir, "*.claiming.lock").Should().BeEmpty();
+        Path.GetFileName(pendingJson[0]).Should().MatchRegex(
+            @"^\d{21}_[0-9a-f]{32}\.json$",
+            "queue files must carry a UTC timestamp and envelope id");
 
         var json = File.ReadAllText(pendingJson[0]);
         var env = TelemetryEnvelope.Deserialize(json);
         env.PayloadJson.Should().Be("{}");
+    }
+
+    [Fact]
+    public void FailedAtomicRename_DoesNotLeavePartialTempFile() {
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        _ = runtime.CreateQueue();
+
+        var target = Path.Combine(runtime.PendingDir, "202609190000000000000_failed.json");
+        Directory.CreateDirectory(target);
+        var method = typeof(DurableTelemetryQueue).GetMethod(
+            "TryWritePendingAtomically",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        method.Should().NotBeNull();
+        var result = (bool)method!.Invoke(null, [target, "{}"] )!;
+
+        result.Should().BeFalse();
+        Directory.EnumerateFiles(runtime.PendingDir, "*.tmp").Should().BeEmpty();
+        Directory.Exists(target).Should().BeTrue();
     }
 
     [Fact]
@@ -56,9 +82,13 @@ public sealed class DurableTelemetryQueueIntegrationTests {
 
         var item = claimed[0];
         File.Exists(item.Path).Should().BeTrue("claimed item must exist in processing dir");
+        File.Exists(item.Path + ".lock").Should().BeTrue("the claim generation must have an ownership marker");
 
         Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
         Directory.EnumerateFiles(runtime.ProcessingDir, "*.json").Should().ContainSingle();
+        Path.GetFileName(item.Path).Should().MatchRegex(
+            @"^\d{21}_[0-9a-f]{32}\.claim\.[0-9a-f]{32}\.json$",
+            "claims must carry a distinct generation");
 
         item.Envelope.PayloadJson.Should().Be(payload);
         item.Envelope.Id.Should().NotBeNullOrWhiteSpace();
@@ -120,6 +150,181 @@ public sealed class DurableTelemetryQueueIntegrationTests {
 
         var recovered = queue.TryClaim(1).Single();
         recovered.Envelope.PayloadJson.Should().Be("{\"event\":\"delayed-recovery\"}");
+    }
+
+    [Fact]
+    public void OldOwner_CompleteAndAbandon_DoNotAffectNewOwnerAfterStaleReclaim() {
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        var queue = runtime.CreateQueue();
+        queue.Enqueue("{\"event\":\"ownership\"}").Should().BeTrue();
+
+        var oldOwner = queue.TryClaim(1).Single();
+        File.SetLastWriteTimeUtc(
+            oldOwner.Path,
+            DateTime.UtcNow - TelemetryConfig.ProcessingStaleThreshold - TimeSpan.FromMinutes(1));
+
+        var newOwner = queue.TryClaim(1).Single();
+        newOwner.Path.Should().NotBe(oldOwner.Path);
+
+        queue.Complete(oldOwner);
+        File.Exists(newOwner.Path).Should().BeTrue();
+        File.Exists(newOwner.Path + ".lock").Should().BeTrue();
+        File.Exists(oldOwner.Path + ".lock").Should().BeFalse();
+
+        queue.Abandon(oldOwner);
+        File.Exists(newOwner.Path).Should().BeTrue();
+        Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TryClaim_ReclaimsAfterControlledLeaseAdvance_WithoutRestart() {
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        var queue = runtime.CreateQueue();
+        queue.Enqueue("{\"event\":\"controlled-clock\"}").Should().BeTrue();
+
+        var claimTime = DateTime.UtcNow;
+        try {
+            TelemetryClock.SetUtcNowOverrideForTests(() => claimTime);
+            var firstOwner = queue.TryClaim(1).Single();
+
+            queue.TryClaim(1).Should().BeEmpty();
+
+            TelemetryClock.SetUtcNowOverrideForTests(
+                () => claimTime + TelemetryConfig.ProcessingStaleThreshold + TimeSpan.FromSeconds(1));
+
+            var recovered = queue.TryClaim(1).Single();
+            recovered.Envelope.PayloadJson.Should().Be("{\"event\":\"controlled-clock\"}");
+            recovered.Path.Should().NotBe(firstOwner.Path);
+        }
+        finally {
+            TelemetryClock.SetUtcNowOverrideForTests(null);
+        }
+    }
+
+    [Fact]
+    public void CrossProcess_KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart() {
+        const string childMarker = "KEELMATRIX_QUEUE_CLAIM_CHILD";
+
+        if (Environment.GetEnvironmentVariable(childMarker) == "1") {
+            var toolName = Environment.GetEnvironmentVariable("KEELMATRIX_QUEUE_TOOL")!;
+            var childSignalPath = Environment.GetEnvironmentVariable("KEELMATRIX_QUEUE_SIGNAL")!;
+            var runtimeContext = new TelemetryRuntimeContext(toolName, typeof(DurableTelemetryQueueIntegrationTests));
+            runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
+            var childQueue = DurableTelemetryQueue.CreateSafe(runtimeContext)!;
+            var childClaim = childQueue.TryClaim(1).Single();
+            File.WriteAllText(childSignalPath, childClaim.Path);
+            Thread.Sleep(Timeout.Infinite);
+            return;
+        }
+
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        var queue = runtime.CreateQueue();
+        queue.Enqueue("{\"event\":\"cross-process\"}").Should().BeTrue();
+
+        var signalPath = Path.Combine(runtime.RootDir, "claim.signal");
+        var startInfo = new ProcessStartInfo {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("vstest");
+        startInfo.ArgumentList.Add(typeof(DurableTelemetryQueueIntegrationTests).Assembly.Location);
+        startInfo.ArgumentList.Add(
+            $"--TestCaseFilter:FullyQualifiedName~{typeof(DurableTelemetryQueueIntegrationTests).FullName}.{nameof(CrossProcess_KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart)}");
+        startInfo.Environment[childMarker] = "1";
+        startInfo.Environment["KEELMATRIX_QUEUE_TOOL"] = runtime.ToolNameUpper;
+        startInfo.Environment["KEELMATRIX_QUEUE_SIGNAL"] = signalPath;
+
+        using var child = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start queue claim child process.");
+
+        try {
+            SpinWait.SpinUntil(() => File.Exists(signalPath) || child!.HasExited, TimeSpan.FromSeconds(30))
+                .Should().BeTrue("the child must claim the event before it is terminated");
+            child!.HasExited.Should().BeFalse();
+
+            child.Kill(entireProcessTree: true);
+            child.WaitForExit(10_000).Should().BeTrue();
+
+            var restartedQueue = runtime.CreateQueue();
+            Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
+            Directory.EnumerateFiles(runtime.ProcessingDir, "*.json").Should().ContainSingle();
+
+            var restartTime = DateTime.UtcNow;
+            TelemetryClock.SetUtcNowOverrideForTests(
+                () => restartTime + TelemetryConfig.ProcessingStaleThreshold + TimeSpan.FromSeconds(1));
+
+            var recovered = restartedQueue.TryClaim(1).Single();
+            recovered.Envelope.PayloadJson.Should().Be("{\"event\":\"cross-process\"}");
+        }
+        finally {
+            TelemetryClock.SetUtcNowOverrideForTests(null);
+            if (!child.HasExited) {
+                try { child.Kill(entireProcessTree: true); }
+                catch { /* swallow */ }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce() {
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        _ = runtime.CreateQueue();
+
+        const int producerCount = 4;
+        const int itemsPerProducer = 24;
+        var produced = new ConcurrentBag<string>();
+        var consumed = new ConcurrentBag<string>();
+        var producersCompleted = 0;
+
+        var producers = Enumerable.Range(0, producerCount).Select(producer => Task.Run(() => {
+            var queue = runtime.CreateQueue();
+            for (var item = 0; item < itemsPerProducer; item++) {
+                var payload = $"{{\"producer\":{producer},\"item\":{item}}}";
+                queue.Enqueue(payload).Should().BeTrue();
+                produced.Add(payload);
+            }
+
+            Interlocked.Increment(ref producersCompleted);
+        })).ToArray();
+
+        var consumers = Enumerable.Range(0, 4).Select(_ => Task.Run(() => {
+            var queue = runtime.CreateQueue();
+            while (true) {
+                var claims = queue.TryClaim(4).ToList();
+                foreach (var claim in claims) {
+                    consumed.Add(claim.Envelope.PayloadJson);
+                    queue.Complete(claim);
+                }
+
+                if (claims.Count == 0) {
+                    var producersDone = Volatile.Read(ref producersCompleted) == producerCount;
+                    var pending = Directory.EnumerateFiles(runtime.PendingDir, "*.json").Any();
+                    var processing = Directory.EnumerateFiles(runtime.ProcessingDir, "*.json").Any();
+                    if (producersDone && !pending && !processing)
+                        return;
+
+                    Thread.Yield();
+                }
+            }
+        })).ToArray();
+
+        await Task.WhenAll(producers.Concat(consumers));
+
+        produced.Should().HaveCount(producerCount * itemsPerProducer);
+        consumed.Should().HaveCount(
+            producerCount * itemsPerProducer,
+            "missing payloads: {0}; pending={1}; processing={2}; dead={3}",
+            string.Join(", ", produced.Except(consumed)),
+            Directory.EnumerateFiles(runtime.PendingDir, "*.json").Count(),
+            Directory.EnumerateFiles(runtime.ProcessingDir, "*.json").Count(),
+            Directory.EnumerateFiles(runtime.DeadDir, "*.json").Count());
+        consumed.Should().OnlyHaveUniqueItems();
+        consumed.Should().BeEquivalentTo(produced);
+        Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
+        Directory.EnumerateFiles(runtime.ProcessingDir, "*.json").Should().BeEmpty();
     }
 
     [Fact]
@@ -214,6 +419,7 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         queue.Abandon(item);
 
         File.Exists(item.Path).Should().BeTrue();
+        File.Exists(item.Path + ".lock").Should().BeTrue();
     }
 
     [Fact]

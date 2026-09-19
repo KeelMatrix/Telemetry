@@ -5,11 +5,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     /// Provides time and calendar utilities for telemetry.
     /// </summary>
     internal static class TelemetryClock {
+        private static Func<DateTime>? utcNowOverrideForTests;
+
+        internal static DateTime UtcNow =>
+            Volatile.Read(ref utcNowOverrideForTests)?.Invoke() ?? DateTime.UtcNow;
+
+        internal static void SetUtcNowOverrideForTests(Func<DateTime>? provider) {
+            Volatile.Write(ref utcNowOverrideForTests, provider);
+        }
+
         /// <summary>
         /// Computes the current ISO week string (YYYY-Www).
         /// </summary>
         internal static string GetCurrentIsoWeek() {
-            return GetIsoWeek(DateTimeOffset.UtcNow.UtcDateTime);
+            return GetIsoWeek(UtcNow);
         }
 
         internal static string GetIsoWeek(DateTime utcDate) {
