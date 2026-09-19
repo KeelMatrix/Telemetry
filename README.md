@@ -50,6 +50,16 @@ if (RepositoryTelemetry.TryResolveRepositoryRoot(Environment.CurrentDirectory, o
 - Minimal payloads only
 - Public API kept intentionally small
 
+### Durable delivery lease
+
+Each queued event has a five-minute processing lease. If a process stops while it
+holds a claim, another process may reclaim the event after that lease expires,
+without requiring another restart. The lease expiry creates a duplicate-delivery
+window: an event may be delivered more than once when the old process and the
+new owner overlap. Claim generations prevent an expired owner from completing,
+abandoning, or deleting a newer owner's claim. Delivery is therefore
+best-effort and is not exactly-once.
+
 ## What gets sent
 
 At most two event types are sent:

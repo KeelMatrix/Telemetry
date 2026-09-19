@@ -152,6 +152,14 @@ It may create:
 
 These files contain only minimal queue, marker, and identity data required for delivery and idempotency. They do not contain user content.
 
+Queued events use a five-minute processing lease. When a process stops or does
+not finish a claim, another process can reclaim that event after the lease
+expires, including during the next claim attempt without a second restart. Lease
+expiry creates a duplicate-delivery window: the same event may be delivered more
+than once if the old process overlaps the new owner. Claim generations ensure
+that an expired owner cannot complete, abandon, or delete the newer owner's
+claim. Delivery is best-effort and does not provide exactly-once delivery.
+
 ## Network endpoint
 
 Telemetry is sent over HTTPS to:

@@ -47,6 +47,12 @@ The API is intentionally small because this package exists to support other Keel
 - Failures are swallowed
 - Opt-out is supported through environment variables or repo-local configuration
 
+Queued delivery uses a five-minute processing lease. After the lease expires,
+another process can reclaim an unfinished event during a normal claim attempt.
+This creates a duplicate-delivery window when the original process overlaps the
+new owner, so delivery is best-effort rather than exactly-once. Claim generations
+prevent an expired owner from completing, abandoning, or deleting a newer claim.
+
 ## Documentation
 
 - Repository: `https://github.com/KeelMatrix/Telemetry`
