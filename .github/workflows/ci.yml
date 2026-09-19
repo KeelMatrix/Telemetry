@@ -12,8 +12,45 @@ on:
   pull_request:
 
 jobs:
+  resolve-version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.version.outputs.is_release }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            if [[ ! "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "::error::Invalid release tag '${GITHUB_REF_NAME}'. Expected vX.Y.Z." >&2
+              exit 1
+            fi
+            package_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "version=${package_version}" >> "$GITHUB_OUTPUT"
+            echo "Release tag ${GITHUB_REF_NAME} resolved to package version ${package_version}."
+            exit 0
+          fi
+
+          package_version="$(sed -n 's:^[[:space:]]*<Version>\([^<]*\)</Version>[[:space:]]*$:\1:p' Directory.Build.props | head -n 1)"
+          if [[ ! "${package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Directory.Build.props does not define a stable X.Y.Z Version." >&2
+            exit 1
+          fi
+          echo "is_release=false" >> "$GITHUB_OUTPUT"
+          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
+
   validate:
     if: github.actor != 'dependabot[bot]'
+    needs: resolve-version
     name: Validate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -36,16 +73,17 @@ jobs:
             10.0.201
 
       - name: Restore
-        run: dotnet restore KeelMatrix.Telemetry.slnx
+        run: dotnet restore KeelMatrix.Telemetry.slnx --configfile NuGet.config
 
       - name: Build
-        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore
+        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore -p:Version=${{ needs.resolve-version.outputs.version }}
 
       - name: Test
-        run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build
+        run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build -p:Version=${{ needs.resolve-version.outputs.version }}
 
   validate-dependabot:
     if: github.actor == 'dependabot[bot]'
+    needs: resolve-version
     name: Validate (ubuntu-latest)
     runs-on: ubuntu-latest
 
@@ -61,23 +99,25 @@ jobs:
             10.0.201
 
       - name: Restore
-        run: dotnet restore KeelMatrix.Telemetry.slnx
+        run: dotnet restore KeelMatrix.Telemetry.slnx --configfile NuGet.config
 
       - name: Build
-        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore
+        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore -p:Version=${{ needs.resolve-version.outputs.version }}
 
       - name: Test
-        run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build
+        run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build -p:Version=${{ needs.resolve-version.outputs.version }}
 
   pack:
     name: Pack
     runs-on: ubuntu-latest
     needs:
+      - resolve-version
       - validate
       - validate-dependabot
     if: |
       always() &&
       !cancelled() &&
+      (needs.resolve-version.result == 'success') &&
       (needs.validate.result == 'success' || needs.validate.result == 'skipped') &&
       (needs.validate-dependabot.result == 'success' || needs.validate-dependabot.result == 'skipped')
 
@@ -91,37 +131,32 @@ jobs:
           dotnet-version: 10.0.201
 
       - name: Restore
-        run: dotnet restore KeelMatrix.Telemetry.slnx
-
-      - name: Resolve package version
-        id: package_version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" != "tag" ]]; then
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ ! "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            echo "::error::Invalid release tag '${GITHUB_REF_NAME}'. Expected vX.Y.Z." >&2
-            exit 1
-          fi
-
-          package_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
-          echo "is_release=true" >> "$GITHUB_OUTPUT"
-          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
-          echo "Release tag ${GITHUB_REF_NAME} resolved to package version ${package_version}."
+        run: dotnet restore KeelMatrix.Telemetry.slnx --configfile NuGet.config
 
       - name: Build
-        run: dotnet build src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-restore
+        run: dotnet build src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-restore -p:Version=${{ needs.resolve-version.outputs.version }}
 
       - name: Pack release
-        if: steps.package_version.outputs.is_release == 'true'
-        run: dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols -p:Version=${{ steps.package_version.outputs.version }} --p:SymbolPackageFormat=snupkg --output ./artifacts/packages
+        if: needs.resolve-version.outputs.is_release == 'true'
+        run: dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols -p:Version=${{ needs.resolve-version.outputs.version }} -p:SymbolPackageFormat=snupkg --output ./artifacts/packages
 
       - name: Pack
-        if: steps.package_version.outputs.is_release != 'true'
-        run: dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols --p:SymbolPackageFormat=snupkg --output ./artifacts/packages
+        if: needs.resolve-version.outputs.is_release != 'true'
+        run: dotnet pack src/KeelMatrix.Telemetry/KeelMatrix.Telemetry.csproj --configuration Release --no-build --include-symbols -p:Version=${{ needs.resolve-version.outputs.version }} -p:SymbolPackageFormat=snupkg --output ./artifacts/packages
+
+      - name: Validate package artifacts
+        shell: pwsh
+        run: |
+          $arguments = @{
+            Version = '${{ needs.resolve-version.outputs.version }}'
+            PackageDirectory = './artifacts/packages'
+            RunConsumerSmoke = $true
+          }
+          if ('${{ needs.resolve-version.outputs.is_release }}' -eq 'true') {
+            $arguments.Tag = '${{ github.ref_name }}'
+            $arguments.RequireFinalizedChangelog = $true
+          }
+          ./scripts/Validate-Release.ps1 @arguments
 
       - name: Upload packages
         uses: actions/upload-artifact@v7
@@ -135,11 +170,13 @@ jobs:
     name: Benchmarks
     runs-on: ubuntu-latest
     needs:
+      - resolve-version
       - validate
       - validate-dependabot
     if: |
       always() &&
       !cancelled() &&
+      (needs.resolve-version.result == 'success') &&
       (needs.validate.result == 'success' || needs.validate.result == 'skipped') &&
       (needs.validate-dependabot.result == 'success' || needs.validate-dependabot.result == 'skipped')
 
@@ -155,10 +192,10 @@ jobs:
             10.0.201
 
       - name: Restore
-        run: dotnet restore KeelMatrix.Telemetry.slnx
+        run: dotnet restore KeelMatrix.Telemetry.slnx --configfile NuGet.config
 
       - name: Build
-        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore
+        run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore -p:Version=${{ needs.resolve-version.outputs.version }}
 
       - name: Run benchmarks
         shell: pwsh
@@ -181,13 +218,18 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
-    needs: pack
-    if: ${{ always() && needs.pack.result == 'success' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
+    needs:
+      - resolve-version
+      - pack
+    if: ${{ always() && needs.resolve-version.result == 'success' && needs.pack.result == 'success' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
     permissions:
       id-token: write
       contents: write
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Download packages
         uses: actions/download-artifact@v8
         with:
@@ -199,6 +241,12 @@ jobs:
         with:
           dotnet-version: 10.0.201
 
+      - name: Validate release artifacts
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.Substring(1)
+          ./scripts/Validate-Release.ps1 -Version $version -Tag '${{ github.ref_name }}' -PackageDirectory './artifacts/packages' -RequireFinalizedChangelog -RunConsumerSmoke
+
       - name: Authenticate to NuGet.org
         id: nuget-login
         uses: NuGet/login@v1
@@ -207,8 +255,9 @@ jobs:
 
       - name: Push packages to NuGet
         run: |
-          dotnet nuget push "./artifacts/packages/KeelMatrix.Telemetry.${GITHUB_REF_NAME#v}.nupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --skip-duplicate
-          dotnet nuget push "./artifacts/packages/*.snupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --skip-duplicate
+          package_version="${GITHUB_REF_NAME#v}"
+          dotnet nuget push "./artifacts/packages/KeelMatrix.Telemetry.${package_version}.nupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --skip-duplicate
+          dotnet nuget push "./artifacts/packages/KeelMatrix.Telemetry.${package_version}.snupkg" --source https://api.nuget.org/v3/index.json --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --skip-duplicate
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
@@ -216,6 +265,8 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}
           generate_release_notes: true
-          files: ./artifacts/packages/*
+          files: |
+            ./artifacts/packages/KeelMatrix.Telemetry.${{ needs.resolve-version.outputs.version }}.nupkg
+            ./artifacts/packages/KeelMatrix.Telemetry.${{ needs.resolve-version.outputs.version }}.snupkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

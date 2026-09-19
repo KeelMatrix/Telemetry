@@ -47,6 +47,7 @@ When you add or change a public member in a packable project:
 
 ## Release and versioning
 
-- Package versioning is centralized in `Directory.Build.props`.
+- Package versioning is centralized in `Directory.Build.props`. Release tags use the `vX.Y.Z` form; CI passes the derived version explicitly to build, test, and pack so the package, assembly metadata, and telemetry metadata stay aligned.
 - CI validates pushes and pull requests on Windows, Linux, and macOS, then packs the NuGet package.
 - Publishing happens only when a Git tag matching `v*` is pushed. That workflow pushes the package to NuGet.org and creates a GitHub release.
+- After building the release artifacts, validate the exact package set and an isolated consumer with `pwsh ./scripts/Validate-Release.ps1 -Version X.Y.Z -Tag vX.Y.Z -PackageDirectory ./artifacts/packages -RequireFinalizedChangelog -RunConsumerSmoke`.

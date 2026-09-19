@@ -157,6 +157,8 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         using var doc = JsonDocument.Parse(harness.Sender.Received.Single(r => r.Event == "activation").Body);
         doc.RootElement.GetProperty("project_hash").GetString().Should().NotBeNullOrWhiteSpace();
         doc.RootElement.GetProperty("installation_hash").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("telemetry_version").GetString().Should().Be(TelemetryConfig.TelemetryVersion);
+        doc.RootElement.GetProperty("schema_version").GetInt32().Should().Be(TelemetryConfig.SchemaVersion);
     }
 
     [Fact]
@@ -174,6 +176,8 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         using var doc = JsonDocument.Parse(harness.Sender.Received.Single(r => r.Event == "heartbeat").Body);
         doc.RootElement.GetProperty("project_hash").GetString().Should().NotBeNullOrWhiteSpace();
         doc.RootElement.GetProperty("installation_hash").GetString().Should().NotBeNullOrWhiteSpace();
+        doc.RootElement.GetProperty("telemetry_version").GetString().Should().Be(TelemetryConfig.TelemetryVersion);
+        doc.RootElement.GetProperty("schema_version").GetInt32().Should().Be(TelemetryConfig.SchemaVersion);
     }
 
     [Fact]
