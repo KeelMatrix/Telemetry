@@ -69,11 +69,12 @@ namespace KeelMatrix.Telemetry {
             if (string.IsNullOrEmpty(toolName) || toolName.Length > ToolMaxLength)
                 return false;
 
-            if (!IsToolNameStartCharacter(toolName[0]))
+            var nonNullToolName = toolName!;
+            if (!IsToolNameStartCharacter(nonNullToolName[0]))
                 return false;
 
-            for (var i = 1; i < toolName.Length; i++) {
-                var character = toolName[i];
+            for (var i = 1; i < nonNullToolName.Length; i++) {
+                var character = nonNullToolName[i];
                 if (!IsToolNameCharacter(character))
                     return false;
             }
