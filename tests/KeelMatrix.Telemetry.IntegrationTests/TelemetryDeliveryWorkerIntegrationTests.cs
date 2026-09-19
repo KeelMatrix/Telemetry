@@ -2,6 +2,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using FluentAssertions;
@@ -305,6 +306,55 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             Directory.EnumerateFiles(harness.ProcessingDir, "*.json").Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task ProcessOptOut_StopsDispatchingQueuedClaims_AndReleasesUnstartedItems() {
+        using var sender = new PausingTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"first\"}").Should().BeTrue();
+        queue.Enqueue("{\"event\":\"second\"}").Should().BeTrue();
+
+        using var worker = harness.CreateWorker();
+        await sender.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Environment.SetEnvironmentVariable("KEELMATRIX_NO_TELEMETRY", "1");
+        sender.ReleaseFirst();
+
+        await WaitUntilAsync(
+            () => Directory.Exists(harness.PendingDir) && Directory.EnumerateFiles(harness.PendingDir, "*.json").Count() == 1,
+            TimeSpan.FromSeconds(5));
+        await Task.Delay(150);
+
+        sender.Received.Should().ContainSingle();
+        var pending = Directory.EnumerateFiles(harness.PendingDir, "*.json").Single();
+        using var pendingDoc = JsonDocument.Parse(File.ReadAllText(pending));
+        pendingDoc.RootElement.GetProperty("Attempts").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task RepeatedSignalsKeepWakeQueueBounded_WithoutLosingPendingWork() {
+        using var sender = new PausingTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
+
+        using var worker = harness.CreateWorker();
+        await sender.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        for (var i = 0; i < 1000; i++) {
+            worker.RequestActivation();
+            worker.RequestHeartbeat();
+        }
+
+        var signal = (SemaphoreSlim)typeof(TelemetryDeliveryWorker)
+            .GetField("signal", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(worker)!;
+        signal.CurrentCount.Should().BeLessThanOrEqualTo(1);
+
+        sender.ReleaseFirst();
+        await WaitUntilAsync(() => sender.Received.Count >= 1, TimeSpan.FromSeconds(5));
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout) {
         var sw = Stopwatch.StartNew();
         while (sw.Elapsed < timeout) {
@@ -355,7 +405,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         private readonly EnvVarScope env;
         private readonly string rootDir;
 
-        public WorkerHarness() {
+        private readonly ITelemetrySender telemetrySender;
+
+        public WorkerHarness(ITelemetrySender? sender = null) {
             env = new EnvVarScope(
                 "KEELMATRIX_NO_TELEMETRY",
                 "DOTNET_CLI_TELEMETRY_OPTOUT",
@@ -366,6 +418,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
 
             Sender = new RecordingTelemetrySender();
+            telemetrySender = sender ?? Sender;
 
             var toolNameUpper = "INTEGRATIONTEST_WORKER_" + Guid.NewGuid().ToString("N");
             RuntimeContext = new TelemetryRuntimeContext(toolNameUpper, typeof(TelemetryDeliveryWorkerIntegrationTests));
@@ -398,11 +451,13 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         }
 
         public TelemetryDeliveryWorker CreateWorker() {
-            return new TelemetryDeliveryWorker(RuntimeContext, RuntimeInfo, new ProjectIdentityProvider(RuntimeContext, RuntimeInfo), Sender);
+            return new TelemetryDeliveryWorker(RuntimeContext, RuntimeInfo, new ProjectIdentityProvider(RuntimeContext, RuntimeInfo), telemetrySender);
         }
 
         public void Dispose() {
-            Sender.Dispose();
+            telemetrySender.Dispose();
+            if (!ReferenceEquals(telemetrySender, Sender))
+                Sender.Dispose();
             env.Dispose();
             TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
             GitDiscovery.SetStartingPointsOverrideForTests(null);
@@ -480,5 +535,27 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         public void Dispose() { }
 
         public readonly record struct ReceivedRequest(string Event, string Body);
+    }
+
+    private sealed class PausingTelemetrySender : ITelemetrySender {
+        private readonly TaskCompletionSource<bool> releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int requestCount;
+
+        public TaskCompletionSource<bool> FirstRequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ConcurrentQueue<string> Received { get; } = new();
+
+        public async Task<bool> TrySendAsync(string json, CancellationToken token) {
+            Received.Enqueue(json);
+            if (Interlocked.Increment(ref requestCount) == 1) {
+                FirstRequestStarted.TrySetResult(true);
+                await releaseFirst.Task.WaitAsync(token);
+            }
+
+            return true;
+        }
+
+        public void ReleaseFirst() => releaseFirst.TrySetResult(true);
+
+        public void Dispose() => releaseFirst.TrySetCanceled();
     }
 }

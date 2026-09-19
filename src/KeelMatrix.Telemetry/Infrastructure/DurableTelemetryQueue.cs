@@ -240,16 +240,27 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         /// <summary>
+        /// Returns a claim that was not started to pending without incrementing its attempts.
+        /// </summary>
+        public void Release(ClaimedItem item) {
+            Requeue(item, incrementAttempts: false);
+        }
+
+        /// <summary>
         /// Returns a failed item back to pending.
         /// Ensures we only delete the processing item after the updated entry is safely persisted,
         /// or after we successfully moved it to dead-letter.
         /// </summary>
         public void Abandon(ClaimedItem item) {
+            Requeue(item, incrementAttempts: true);
+        }
+
+        private void Requeue(ClaimedItem item, bool incrementAttempts) {
             try {
                 var env = item.Envelope;
 
                 // If max attempts reached, try to dead-letter; do not delete unless move succeeds.
-                if (env.Attempts + 1 >= TelemetryConfig.MaxSendAttempts) {
+                if (incrementAttempts && env.Attempts + 1 >= TelemetryConfig.MaxSendAttempts) {
                     MoveToDeadLetterBestEffort(item.Path);
                     return;
                 }
@@ -259,7 +270,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     env.PayloadJson,
                     env.EnqueuedUtc
                 ) {
-                    Attempts = env.Attempts + 1
+                    Attempts = incrementAttempts ? env.Attempts + 1 : env.Attempts
                 };
 
                 var target = Path.Combine(pendingDir, Path.GetFileName(item.Path));

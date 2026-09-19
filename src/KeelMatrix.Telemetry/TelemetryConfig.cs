@@ -40,6 +40,7 @@ namespace KeelMatrix.Telemetry {
             internal const int MaxProjectFiles = 3;
             internal const int MaxRecursiveDirs = 128;
             internal const int MaxRecursiveFiles = 1024;
+            internal const int MaxXmlDepth = 128;
             internal static readonly char[] Separator = [';'];
         }
 
@@ -65,9 +66,19 @@ namespace KeelMatrix.Telemetry {
         private static int processDisabled; // 0/1
         private static readonly object repositoryDisableDecisionLock = new();
         // Process-execution memoization for worker-thread repo-local disable discovery,
-        // scoped to the current resolved repository root set.
-        private static string? repositoryDisableDecisionKey;
-        private static int repositoryDisableDecision = -1; // -1 unresolved, 0 enabled, 1 disabled
+        // scoped to the current resolved repository root set. Keep the key and decision
+        // in one immutable object so readers cannot observe a mixed pair.
+        private static RepositoryDisableSnapshot repositoryDisableSnapshot = new(null, -1);
+
+        private sealed class RepositoryDisableSnapshot {
+            internal RepositoryDisableSnapshot(string? key, int decision) {
+                Key = key;
+                Decision = decision;
+            }
+
+            internal string? Key { get; }
+            internal int Decision { get; }
+        }
 
         internal static string ResolveRootDirectory(string toolNameUpper) {
             var safeToolName = SanitizeToolNameForPath(toolNameUpper);
@@ -166,8 +177,7 @@ namespace KeelMatrix.Telemetry {
 
         internal static void ResetProcessDisabledForTests() {
             Interlocked.Exchange(ref processDisabled, 0);
-            Volatile.Write(ref repositoryDisableDecision, -1);
-            Volatile.Write(ref repositoryDisableDecisionKey, null);
+            Volatile.Write(ref repositoryDisableSnapshot, new RepositoryDisableSnapshot(null, -1));
             TelemetryDisableResolver.SetRepositoryDisableOverrideForTests(null);
         }
 
@@ -201,27 +211,25 @@ namespace KeelMatrix.Telemetry {
 
             var repositoryRoots = TelemetryDisableResolver.GetCandidateRepositoryRoots();
             var repositoryDecisionKey = CreateRepositoryDisableDecisionKey(repositoryRoots);
-            var cachedRepositoryDecisionKey = Volatile.Read(ref repositoryDisableDecisionKey);
-            var repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
-            if (repositoryDecision == 1 && string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal)) {
+            var cachedSnapshot = Volatile.Read(ref repositoryDisableSnapshot);
+            if (cachedSnapshot.Decision == 1 && string.Equals(cachedSnapshot.Key, repositoryDecisionKey, StringComparison.Ordinal)) {
                 DisableTelemetryForCurrentProcess();
                 return true;
             }
 
-            if (repositoryDecision == 0 && string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal))
+            if (cachedSnapshot.Decision == 0 && string.Equals(cachedSnapshot.Key, repositoryDecisionKey, StringComparison.Ordinal))
                 return false;
 
             lock (repositoryDisableDecisionLock) {
-                cachedRepositoryDecisionKey = Volatile.Read(ref repositoryDisableDecisionKey);
-                repositoryDecision = Volatile.Read(ref repositoryDisableDecision);
-                if (repositoryDecision == -1 || !string.Equals(cachedRepositoryDecisionKey, repositoryDecisionKey, StringComparison.Ordinal)) {
-                    repositoryDecision = TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread(repositoryRoots) ? 1 : 0;
-                    Volatile.Write(ref repositoryDisableDecisionKey, repositoryDecisionKey);
-                    Volatile.Write(ref repositoryDisableDecision, repositoryDecision);
+                cachedSnapshot = Volatile.Read(ref repositoryDisableSnapshot);
+                if (cachedSnapshot.Decision == -1 || !string.Equals(cachedSnapshot.Key, repositoryDecisionKey, StringComparison.Ordinal)) {
+                    var repositoryDecision = TelemetryDisableResolver.IsRepositoryTelemetryDisabledOnWorkerThread(repositoryRoots) ? 1 : 0;
+                    cachedSnapshot = new RepositoryDisableSnapshot(repositoryDecisionKey, repositoryDecision);
+                    Volatile.Write(ref repositoryDisableSnapshot, cachedSnapshot);
                 }
             }
 
-            if (repositoryDecision == 0)
+            if (cachedSnapshot.Decision == 0)
                 return false;
 
             DisableTelemetryForCurrentProcess();

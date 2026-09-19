@@ -15,8 +15,9 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private ITelemetryQueue? queue;
         private readonly ITelemetrySender httpSender;
 
-        private readonly SemaphoreSlim signal = new(0, int.MaxValue);
+        private readonly SemaphoreSlim signal = new(0, 1);
         private readonly CancellationTokenSource cts = new();
+        private int signalPending;
 
         // Signals set from calling threads (must be non-blocking to set).
         private int activationRequested; // 0/1
@@ -104,11 +105,14 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// Signals the worker to wake up. Must not block.
         /// </summary>
         private void Signal() {
+            if (Interlocked.Exchange(ref signalPending, 1) == 1)
+                return;
+
             try {
                 signal.Release();
             }
             catch {
-                // swallow (SemaphoreFullException etc.)
+                Volatile.Write(ref signalPending, 0);
             }
         }
 
@@ -121,6 +125,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     // The timeout gives stale processing claims a bounded repeated recovery
                     // opportunity even when the process receives no new tracking call.
                     _ = await signal.WaitAsync(QueueRecoveryPollInterval, token).ConfigureAwait(false);
+                    Volatile.Write(ref signalPending, 0);
                 }
                 catch {
                     break;
@@ -208,11 +213,32 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 }
 
                 while (!token.IsCancellationRequested) {
+                    if (TelemetryConfig.IsTelemetryDisabled()) {
+                        Interlocked.Exchange(ref hasPendingWork, 0);
+                        ResetBackoff();
+                        break;
+                    }
+
                     bool anyAttempted = false;
                     bool anyFailed = false;
 
                     try {
-                        foreach (var item in telemetryQueue.TryClaim(4)) {
+                        var claimedItems = telemetryQueue.TryClaim(4).ToList();
+                        for (var index = 0; index < claimedItems.Count; index++) {
+                            var item = claimedItems[index];
+
+                            // Opt-out can change while an earlier request is in flight. Claims
+                            // that have not started must be returned without counting a failure.
+                            if (TelemetryConfig.IsTelemetryDisabled()) {
+                                telemetryQueue.Release(item);
+                                for (index++; index < claimedItems.Count; index++)
+                                    telemetryQueue.Release(claimedItems[index]);
+
+                                Interlocked.Exchange(ref hasPendingWork, 0);
+                                ResetBackoff();
+                                break;
+                            }
+
                             anyAttempted = true;
 
                             try {

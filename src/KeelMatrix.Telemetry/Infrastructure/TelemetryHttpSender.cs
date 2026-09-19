@@ -31,8 +31,11 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 var client = GetClient();
+                using var request = new HttpRequestMessage(HttpMethod.Post, url) {
+                    Content = content
+                };
                 using var response = await client
-                    .PostAsync(url, content, token)
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
                     .ConfigureAwait(false);
 
                 return response.IsSuccessStatusCode;

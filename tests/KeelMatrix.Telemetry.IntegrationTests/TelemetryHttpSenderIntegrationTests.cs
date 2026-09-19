@@ -74,6 +74,19 @@ public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
         await act.Should().NotThrowAsync();
     }
 
+    [Fact]
+    public async Task TrySendAsync_ReturnsAfterHeaders_WhenResponseBodyDoesNotComplete() {
+        server.NeverEndingResponseBody = true;
+        using var sender = new TelemetryHttpSender(server.Url);
+
+        var sendTask = sender.TrySendAsync("{}", CancellationToken.None);
+        await server.ResponseStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var completed = await Task.WhenAny(sendTask, Task.Delay(TimeSpan.FromSeconds(2)));
+        completed.Should().Be(sendTask);
+        (await sendTask).Should().BeTrue();
+    }
+
     private static int GetUnusedTcpPort() {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -92,6 +105,8 @@ public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
 
         public Uri Url { get; }
         public HttpStatusCode ResponseStatusCode { get; set; } = HttpStatusCode.OK;
+        public bool NeverEndingResponseBody { get; set; }
+        public TaskCompletionSource<bool> ResponseStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ConcurrentQueue<RequestRecord> ReceivedQueue { get; } = new();
         public List<RequestRecord> Received => [.. ReceivedQueue];
@@ -158,8 +173,17 @@ public sealed class TelemetryHttpSenderIntegrationTests : IDisposable {
 
                     ctx.Response.StatusCode = (int)ResponseStatusCode;
                     ctx.Response.ContentType = "application/json";
-                    byte[] bytes = Encoding.UTF8.GetBytes("{}");
-                    await ctx.Response.OutputStream.WriteAsync(bytes, token);
+                    if (NeverEndingResponseBody) {
+                        ctx.Response.ContentLength64 = 1024 * 1024 * 1024;
+                        byte[] prefix = [ (byte)'{' ];
+                        await ctx.Response.OutputStream.WriteAsync(prefix, token);
+                        ResponseStarted.TrySetResult(true);
+                        await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    }
+                    else {
+                        byte[] bytes = Encoding.UTF8.GetBytes("{}");
+                        await ctx.Response.OutputStream.WriteAsync(bytes, token);
+                    }
                 }
                 catch {
                     // swallow
