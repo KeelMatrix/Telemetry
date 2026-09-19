@@ -4,6 +4,8 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.Loader;
+using System.Text.Json;
 using FluentAssertions;
 using KeelMatrix.Telemetry.Infrastructure;
 using KeelMatrix.Telemetry.Storage;
@@ -18,6 +20,15 @@ public static class DurableTelemetryQueueIntegrationTestsCollectionDefinition {
 [Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class DurableTelemetryQueueIntegrationTests {
     private const string QueueFileTimestampFormat = "yyyyMMddHHmmssfffffff";
+    private const string QueueProcessRoleVariable = "KEELMATRIX_QUEUE_PROCESS_ROLE";
+    private const string QueueProcessToolVariable = "KEELMATRIX_QUEUE_PROCESS_TOOL";
+    private const string QueueProcessSignalVariable = "KEELMATRIX_QUEUE_PROCESS_SIGNAL";
+    private const string QueueProcessReleaseVariable = "KEELMATRIX_QUEUE_PROCESS_RELEASE";
+    private const string QueueProcessOutputVariable = "KEELMATRIX_QUEUE_PROCESS_OUTPUT";
+    private const string QueueProcessProducerIndexVariable = "KEELMATRIX_QUEUE_PROCESS_PRODUCER_INDEX";
+    private const string QueueProcessProducerCountVariable = "KEELMATRIX_QUEUE_PROCESS_PRODUCER_COUNT";
+    private const string QueueProcessItemsPerProducerVariable = "KEELMATRIX_QUEUE_PROCESS_ITEMS_PER_PRODUCER";
+    private const string QueueProcessProducersDoneVariable = "KEELMATRIX_QUEUE_PROCESS_PRODUCERS_DONE";
 
     [Fact]
     public void CreateSafe_ReturnsNoQueue_WhenPendingPathIsRegularFile() {
@@ -328,6 +339,118 @@ public sealed class DurableTelemetryQueueIntegrationTests {
     }
 
     [Fact]
+    public async Task CrossProcess_SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce() {
+        var role = Environment.GetEnvironmentVariable(QueueProcessRoleVariable);
+        if (role == "producer") {
+            var toolName = Environment.GetEnvironmentVariable(QueueProcessToolVariable)!;
+            var producerIndex = int.Parse(Environment.GetEnvironmentVariable(QueueProcessProducerIndexVariable)!);
+            var childProducerCount = int.Parse(Environment.GetEnvironmentVariable(QueueProcessProducerCountVariable)!);
+            var childItemsPerProducer = int.Parse(Environment.GetEnvironmentVariable(QueueProcessItemsPerProducerVariable)!);
+            var queue = DurableTelemetryQueue.CreateSafe(CreateChildRuntimeContext(toolName))!;
+
+            for (var item = 0; item < childItemsPerProducer; item++) {
+                var payload = $"{{\"producer\":{producerIndex},\"item\":{item}}}";
+                queue.Enqueue(payload).Should().BeTrue();
+            }
+
+            producerIndex.Should().BeLessThan(childProducerCount);
+            return;
+        }
+
+        if (role == "consumer") {
+            var toolName = Environment.GetEnvironmentVariable(QueueProcessToolVariable)!;
+            var outputPath = Environment.GetEnvironmentVariable(QueueProcessOutputVariable)!;
+            var childProducersDonePath = Environment.GetEnvironmentVariable(QueueProcessProducersDoneVariable)!;
+            var runtimeContext = CreateChildRuntimeContext(toolName);
+            var queue = DurableTelemetryQueue.CreateSafe(runtimeContext)!;
+            var consumed = new List<string>();
+
+            while (true) {
+                var claims = queue.TryClaim(4).ToList();
+                foreach (var claim in claims) {
+                    consumed.Add(claim.Envelope.PayloadJson);
+                    queue.Complete(claim);
+                }
+
+                if (claims.Count == 0 &&
+                    File.Exists(childProducersDonePath) &&
+                    !Directory.EnumerateFiles(Path.Combine(runtimeContext.GetRootDirectory(), "telemetry.queue", "pending"), "*.json").Any() &&
+                    !Directory.EnumerateFiles(Path.Combine(runtimeContext.GetRootDirectory(), "telemetry.queue", "processing"), "*.json").Any())
+                    break;
+
+                await Task.Delay(5);
+            }
+
+            File.WriteAllLines(outputPath, consumed);
+            return;
+        }
+
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        _ = runtime.CreateQueue();
+
+        const int producerCount = 3;
+        const int itemsPerProducer = 24;
+        const int consumerCount = 4;
+        var producersDonePath = Path.Combine(runtime.RootDir, "cross-process-producers.done");
+        var children = new List<Process>();
+        var producerWaits = new List<Task>();
+        var consumerWaits = new List<Task>();
+
+        try {
+            for (var producer = 0; producer < producerCount; producer++) {
+                var child = StartQueueTestProcess(
+                    nameof(CrossProcess_SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce),
+                    "producer",
+                    runtime.ToolNameUpper,
+                    producerIndex: producer,
+                    producerCount: producerCount,
+                    itemsPerProducer: itemsPerProducer);
+                children.Add(child);
+                producerWaits.Add(WaitForChildSuccessAsync(child));
+            }
+
+            for (var consumer = 0; consumer < consumerCount; consumer++) {
+                var outputPath = Path.Combine(runtime.RootDir, $"cross-process-consumer-{consumer}.txt");
+                var child = StartQueueTestProcess(
+                    nameof(CrossProcess_SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce),
+                    "consumer",
+                    runtime.ToolNameUpper,
+                    outputPath: outputPath,
+                    producersDonePath: producersDonePath);
+                children.Add(child);
+                consumerWaits.Add(WaitForChildSuccessAsync(child));
+            }
+
+            await Task.WhenAll(producerWaits);
+            File.WriteAllText(producersDonePath, "done");
+            await Task.WhenAll(consumerWaits);
+
+            var consumed = children
+                .Where(child => child.StartInfo.Environment[QueueProcessRoleVariable] == "consumer")
+                .SelectMany(child => {
+                    var outputPath = child.StartInfo.Environment[QueueProcessOutputVariable]!;
+                    return File.Exists(outputPath) ? File.ReadAllLines(outputPath) : [];
+                })
+                .ToList();
+            var expected = Enumerable.Range(0, producerCount)
+                .SelectMany(producer => Enumerable.Range(0, itemsPerProducer)
+                    .Select(item => $"{{\"producer\":{producer},\"item\":{item}}}"))
+                .ToList();
+
+            consumed.Should().HaveCount(expected.Count);
+            consumed.Should().OnlyHaveUniqueItems();
+            consumed.Should().BeEquivalentTo(expected);
+            Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
+            Directory.EnumerateFiles(runtime.ProcessingDir, "*.json").Should().BeEmpty();
+        }
+        finally {
+            File.WriteAllText(producersDonePath, "done");
+            foreach (var child in children)
+                KillIfRunning(child);
+        }
+    }
+
+    [Fact]
     public void TryClaim_SkipsCorruptPrefixAndClaimsLaterValidEnvelope() {
         using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
         _ = runtime.CreateQueue();
@@ -361,6 +484,94 @@ public sealed class DurableTelemetryQueueIntegrationTests {
                 DateTime.UtcNow - TelemetryConfig.ProcessingStaleThreshold - TimeSpan.FromMinutes(1));
             _ = runtime.CreateQueue();
             File.Exists(activeTempPath).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task CrossProcess_QueueInitialization_DoesNotDeleteActiveProducerTempFile() {
+        var role = Environment.GetEnvironmentVariable(QueueProcessRoleVariable);
+        if (role == "active-temp-producer") {
+            var toolName = Environment.GetEnvironmentVariable(QueueProcessToolVariable)!;
+            var signalPath = Environment.GetEnvironmentVariable(QueueProcessSignalVariable)!;
+            var childReleasePath = Environment.GetEnvironmentVariable(QueueProcessReleaseVariable)!;
+            var runtimeContext = CreateChildRuntimeContext(toolName);
+
+            DurableTelemetryQueue.SetPendingWritePauseHookForTests((tmpPath, ownershipPath) => {
+                File.WriteAllText(signalPath, tmpPath + Environment.NewLine + ownershipPath);
+                SpinWait.SpinUntil(
+                    () => File.Exists(childReleasePath),
+                    TimeSpan.FromSeconds(30))
+                    .Should().BeTrue("the parent must release the producer after checking the active temp");
+            });
+
+            DurableTelemetryQueue.CreateSafe(runtimeContext)!.Enqueue("{\"event\":\"active-temp\"}")
+                .Should().BeTrue();
+            return;
+        }
+
+        if (role == "active-temp-initializer") {
+            var toolName = Environment.GetEnvironmentVariable(QueueProcessToolVariable)!;
+            var signalPath = Environment.GetEnvironmentVariable(QueueProcessSignalVariable)!;
+            var runtimeContext = CreateChildRuntimeContext(toolName);
+            DurableTelemetryQueue.CreateSafe(runtimeContext).Should().NotBeNull();
+            File.WriteAllText(signalPath, "initialized");
+            return;
+        }
+
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        _ = runtime.CreateQueue();
+
+        var producerSignalPath = Path.Combine(runtime.RootDir, "active-temp-producer.signal");
+        var initializerSignalPath = Path.Combine(runtime.RootDir, "active-temp-initializer.signal");
+        var releasePath = Path.Combine(runtime.RootDir, "active-temp.release");
+        using var producer = StartQueueTestProcess(
+            nameof(CrossProcess_QueueInitialization_DoesNotDeleteActiveProducerTempFile),
+            "active-temp-producer",
+            runtime.ToolNameUpper,
+            producerSignalPath,
+            releasePath);
+
+        try {
+            SpinWait.SpinUntil(
+                () => File.Exists(producerSignalPath) || producer.HasExited,
+                TimeSpan.FromSeconds(30))
+                .Should().BeTrue("the producer must pause after writing its temp file");
+            producer.HasExited.Should().BeFalse();
+
+            var producerPaths = File.ReadAllLines(producerSignalPath);
+            producerPaths.Should().HaveCount(2);
+            var activeTempPath = producerPaths[0];
+            var ownershipPath = producerPaths[1];
+            File.Exists(activeTempPath).Should().BeTrue();
+            File.Exists(ownershipPath).Should().BeTrue();
+            File.SetLastWriteTimeUtc(
+                activeTempPath,
+                DateTime.UtcNow - TelemetryConfig.ProcessingStaleThreshold - TimeSpan.FromMinutes(1));
+
+            using var initializer = StartQueueTestProcess(
+                nameof(CrossProcess_QueueInitialization_DoesNotDeleteActiveProducerTempFile),
+                "active-temp-initializer",
+                runtime.ToolNameUpper,
+                initializerSignalPath,
+                releasePath);
+            await WaitForChildSuccessAsync(initializer);
+            File.Exists(initializerSignalPath).Should().BeTrue();
+
+            File.Exists(activeTempPath).Should().BeTrue(
+                "queue initialization in another process must not delete a producer temp file whose ownership sidecar is held");
+            File.Exists(ownershipPath).Should().BeTrue();
+
+            File.WriteAllText(releasePath, "release");
+            await WaitForChildSuccessAsync(producer);
+
+            Directory.EnumerateFiles(runtime.PendingDir, "*.tmp").Should().BeEmpty();
+            var pendingPaths = Directory.EnumerateFiles(runtime.PendingDir, "*.json").ToList();
+            pendingPaths.Should().ContainSingle();
+            TelemetryEnvelope.Deserialize(File.ReadAllText(pendingPaths.Single())).PayloadJson.Should().Be("{\"event\":\"active-temp\"}");
+        }
+        finally {
+            File.WriteAllText(releasePath, "release");
+            KillIfRunning(producer);
         }
     }
 
@@ -464,6 +675,257 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         Directory.EnumerateFiles(runtime.DeadDir, "*.json")
             .Any(path => Path.GetFileName(path).Contains("_newd_", StringComparison.Ordinal))
             .Should().BeTrue();
+    }
+
+    [Fact]
+    public void Netstandard2Queue_ExecutesClaimRecoveryAndTerminalOperations() {
+        var assemblyPath = FindNetstandardAssemblyPath();
+        var loadContext = new NetstandardAssemblyLoadContext(Path.GetDirectoryName(assemblyPath)!);
+        var rootDirectory = string.Empty;
+
+        try {
+            var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+            var contextType = assembly.GetType("KeelMatrix.Telemetry.TelemetryRuntimeContext")!;
+            var queueType = assembly.GetType("KeelMatrix.Telemetry.Infrastructure.DurableTelemetryQueue")!;
+            var toolName = "NETSTANDARDQUEUE_" + Guid.NewGuid().ToString("N")[..16];
+            var runtimeContext = Activator.CreateInstance(
+                contextType,
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                args: [toolName, typeof(DurableTelemetryQueueIntegrationTests)],
+                culture: CultureInfo.InvariantCulture)!;
+
+            Invoke(runtimeContext, "EnsureRootDirectoryResolvedOnWorkerThread");
+            rootDirectory = (string)Invoke(runtimeContext, "GetRootDirectory")!;
+            var queue = Invoke(queueType, "CreateSafe", runtimeContext)!;
+            queue.Should().NotBeNull();
+
+            ((bool)Invoke(queue, "Enqueue", "{\"event\":\"netstandard-queue\"}")!).Should().BeTrue();
+            var firstClaim = SingleClaim(queue);
+            var firstClaimPath = ClaimPath(firstClaim);
+            File.Exists(firstClaimPath).Should().BeTrue();
+
+            Invoke(queue, "Release", firstClaim);
+            var releasedClaim = SingleClaim(queue);
+            Invoke(queue, "Abandon", releasedClaim);
+
+            var pendingPath = Directory.EnumerateFiles(
+                    Path.Combine(rootDirectory, "telemetry.queue", "pending"),
+                    "*.json")
+                .Single();
+            File.SetLastWriteTimeUtc(
+                pendingPath,
+                DateTime.UtcNow - TimeSpan.FromMinutes(6));
+
+            var recoveredQueue = Invoke(queueType, "CreateSafe", runtimeContext)!;
+            var recoveredClaim = SingleClaim(recoveredQueue);
+            var recoveredClaimPath = ClaimPath(recoveredClaim);
+            Invoke(recoveredQueue, "Complete", recoveredClaim);
+
+            File.Exists(recoveredClaimPath).Should().BeFalse();
+            Directory.EnumerateFiles(
+                    Path.Combine(rootDirectory, "telemetry.queue", "pending"),
+                    "*.json")
+                .Should().BeEmpty();
+            Directory.EnumerateFiles(
+                    Path.Combine(rootDirectory, "telemetry.queue", "processing"),
+                    "*.json")
+                .Should().BeEmpty();
+        }
+        finally {
+            loadContext.Unload();
+            TestCleanup.TryDeleteDirectory(rootDirectory);
+        }
+    }
+
+    private static TelemetryRuntimeContext CreateChildRuntimeContext(string toolName) {
+        var runtimeContext = new TelemetryRuntimeContext(toolName, typeof(DurableTelemetryQueueIntegrationTests));
+        runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
+        return runtimeContext;
+    }
+
+    private static Process StartQueueTestProcess(
+        string testName,
+        string role,
+        string toolName,
+        string? signalPath = null,
+        string? releasePath = null,
+        string? outputPath = null,
+        string? producersDonePath = null,
+        int? producerIndex = null,
+        int? producerCount = null,
+        int? itemsPerProducer = null) {
+        var startInfo = new ProcessStartInfo {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("vstest");
+        startInfo.ArgumentList.Add(typeof(DurableTelemetryQueueIntegrationTests).Assembly.Location);
+        startInfo.ArgumentList.Add(
+            $"--TestCaseFilter:FullyQualifiedName~{typeof(DurableTelemetryQueueIntegrationTests).FullName}.{testName}");
+        startInfo.Environment[QueueProcessRoleVariable] = role;
+        startInfo.Environment[QueueProcessToolVariable] = toolName;
+
+        SetEnvironmentValue(startInfo, QueueProcessSignalVariable, signalPath);
+        SetEnvironmentValue(startInfo, QueueProcessReleaseVariable, releasePath);
+        SetEnvironmentValue(startInfo, QueueProcessOutputVariable, outputPath);
+        SetEnvironmentValue(startInfo, QueueProcessProducersDoneVariable, producersDonePath);
+        SetEnvironmentValue(startInfo, QueueProcessProducerIndexVariable, producerIndex?.ToString(CultureInfo.InvariantCulture));
+        SetEnvironmentValue(startInfo, QueueProcessProducerCountVariable, producerCount?.ToString(CultureInfo.InvariantCulture));
+        SetEnvironmentValue(startInfo, QueueProcessItemsPerProducerVariable, itemsPerProducer?.ToString(CultureInfo.InvariantCulture));
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start queue test process.");
+    }
+
+    private static void SetEnvironmentValue(ProcessStartInfo startInfo, string name, string? value) {
+        if (value is not null)
+            startInfo.Environment[name] = value;
+    }
+
+    private static async Task WaitForChildSuccessAsync(Process process) {
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(90));
+        var standardOutput = await process.StandardOutput.ReadToEndAsync();
+        var standardError = await process.StandardError.ReadToEndAsync();
+        process.ExitCode.Should().Be(
+            0,
+            "child process output: stdout={0}; stderr={1}",
+            standardOutput,
+            standardError);
+    }
+
+    private static void KillIfRunning(Process process) {
+        try {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+        catch {
+            // The child may have exited between HasExited and Kill.
+        }
+    }
+
+    private static string FindNetstandardAssemblyPath() {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null) {
+            if (File.Exists(Path.Combine(current.FullName, "KeelMatrix.Telemetry.slnx"))) {
+                var configuration = Directory.GetParent(AppContext.BaseDirectory)!.Name;
+                var candidate = Path.Combine(
+                    current.FullName,
+                    "src",
+                    "KeelMatrix.Telemetry",
+                    "bin",
+                    configuration,
+                    "netstandard2.0",
+                    "KeelMatrix.Telemetry.dll");
+                if (File.Exists(candidate))
+                    return candidate;
+
+                foreach (var fallbackConfiguration in new[] { "Release", "Debug" }) {
+                    candidate = Path.Combine(
+                        current.FullName,
+                        "src",
+                        "KeelMatrix.Telemetry",
+                        "bin",
+                        fallbackConfiguration,
+                        "netstandard2.0",
+                        "KeelMatrix.Telemetry.dll");
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
+            }
+
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("The built netstandard2.0 Telemetry assembly was not found.");
+    }
+
+    private static object SingleClaim(object queue) {
+        var claims = ((System.Collections.IEnumerable)Invoke(queue, "TryClaim", 1)!)
+            .Cast<object>()
+            .ToList();
+        claims.Should().ContainSingle();
+        return claims.Single();
+    }
+
+    private static string ClaimPath(object claim) {
+        return (string)claim.GetType().GetProperty(
+            "Path",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!.GetValue(claim)!;
+    }
+
+    private static object? Invoke(object target, string methodName, params object?[] args) {
+        var type = target as Type ?? target.GetType();
+        var instance = target as Type is null ? target : null;
+        var method = type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .Single(method =>
+                method.Name == methodName &&
+                method.GetParameters().Length == args.Length);
+        return method.Invoke(instance, args);
+    }
+
+    private sealed class NetstandardAssemblyLoadContext : AssemblyLoadContext {
+        private readonly string assemblyDirectory;
+        private readonly AssemblyDependencyResolver dependencyResolver;
+        private readonly string packageRoot;
+        private readonly string[] packagePaths;
+
+        internal NetstandardAssemblyLoadContext(string assemblyDirectory)
+            : base(isCollectible: true) {
+            this.assemblyDirectory = assemblyDirectory;
+            dependencyResolver = new AssemblyDependencyResolver(
+                Path.Combine(assemblyDirectory, "KeelMatrix.Telemetry.dll"));
+            packageRoot = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+            packagePaths = ReadPackagePaths(Path.Combine(assemblyDirectory, "KeelMatrix.Telemetry.deps.json"));
+        }
+
+        protected override Assembly? Load(AssemblyName assemblyName) {
+            var dependencyPath = dependencyResolver.ResolveAssemblyToPath(assemblyName)
+                ?? Path.Combine(assemblyDirectory, assemblyName.Name + ".dll");
+            if (File.Exists(dependencyPath))
+                return LoadFromAssemblyPath(dependencyPath);
+
+            foreach (var packagePath in packagePaths) {
+                var netstandardPath = Path.Combine(
+                    packageRoot,
+                    packagePath,
+                    "lib",
+                    "netstandard2.0",
+                    assemblyName.Name + ".dll");
+                if (File.Exists(netstandardPath))
+                    return LoadFromAssemblyPath(netstandardPath);
+
+                var libRoot = Path.Combine(packageRoot, packagePath, "lib");
+                if (!Directory.Exists(libRoot))
+                    continue;
+
+                var compatiblePath = Directory.EnumerateFiles(
+                        libRoot,
+                        assemblyName.Name + ".dll",
+                        SearchOption.AllDirectories)
+                    .FirstOrDefault();
+                if (compatiblePath is not null)
+                    return LoadFromAssemblyPath(compatiblePath);
+            }
+
+            return null;
+        }
+
+        private static string[] ReadPackagePaths(string dependenciesPath) {
+            using var document = JsonDocument.Parse(File.ReadAllText(dependenciesPath));
+            return document.RootElement
+                .GetProperty("libraries")
+                .EnumerateObject()
+                .Where(entry => entry.Value.GetProperty("type").GetString() == "package")
+                .Select(entry => entry.Value.GetProperty("path").GetString())
+                .Where(path => path is not null)
+                .Select(path => path!)
+                .ToArray();
+        }
     }
 
     private static void WritePendingRawText(string dir, string rawText, string suffix) {

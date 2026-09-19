@@ -16,6 +16,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private const string ClaimLockSuffix = ".lock";
         private const string PendingClaimLockSuffix = ".claiming.lock";
 
+        private static Action<string, string>? pendingWritePauseHookForTests;
+
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly string pendingDir;
         private readonly string processingDir;
@@ -384,6 +386,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 // process from treating a paused producer's temp file as orphaned.
                 using (new FileStream(ownershipPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) {
                     File.WriteAllText(tmp, content, Encoding.UTF8);
+                    Volatile.Read(ref pendingWritePauseHookForTests)?.Invoke(tmp, ownershipPath);
 
 #if NET8_0_OR_GREATER
                     // On modern runtimes, overwrite is supported directly.
@@ -407,6 +410,10 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             finally {
                 SafeDelete(ownershipPath);
             }
+        }
+
+        internal static void SetPendingWritePauseHookForTests(Action<string, string>? hook) {
+            Volatile.Write(ref pendingWritePauseHookForTests, hook);
         }
 
         private static bool TryReadBoundedText(string path, int maxBytes, out string text) {
