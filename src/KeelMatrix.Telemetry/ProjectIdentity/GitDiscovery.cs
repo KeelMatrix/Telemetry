@@ -205,11 +205,15 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 if (!TryReadLooseCommitObject(gitDir, current, out var commitText))
                     return false;
 
-                if (!TryGetFirstParentHash(commitText, out var parentHashLower)) {
+                var parentResult = TryGetFirstParentHash(commitText, out var parentHashLower);
+                if (parentResult == FirstParentHashResult.NoParent) {
                     // No parents => root commit.
                     rootCommitHashLowerAscii = current;
                     return true;
                 }
+
+                if (parentResult == FirstParentHashResult.Malformed)
+                    return false;
 
                 current = parentHashLower;
             }
@@ -335,7 +339,13 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
         }
 
-        private static bool TryGetFirstParentHash(string commitText, out string parentHashLower) {
+        private enum FirstParentHashResult {
+            NoParent,
+            Valid,
+            Malformed
+        }
+
+        private static FirstParentHashResult TryGetFirstParentHash(string commitText, out string parentHashLower) {
             parentHashLower = string.Empty;
 
             // Headers are lines until a blank line.
@@ -349,10 +359,12 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                     continue;
 
                 var hash = line.Substring("parent ".Length).Trim();
-                return TryNormalize40Hex(hash, out parentHashLower);
+                return TryNormalize40Hex(hash, out parentHashLower)
+                    ? FirstParentHashResult.Valid
+                    : FirstParentHashResult.Malformed;
             }
 
-            return false;
+            return FirstParentHashResult.NoParent;
         }
 
         private static bool TryResolveGitDirFromFile(string dotGitFilePath, out string gitDir) {

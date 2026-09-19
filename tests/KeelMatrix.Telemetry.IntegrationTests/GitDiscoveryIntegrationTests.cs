@@ -169,6 +169,27 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
             out _).Should().BeFalse("a loose Git object with an invalid Adler-32 trailer is corrupt");
     }
 
+    [Theory]
+    [InlineData("123")]
+    [InlineData("NOT_A_SHA")]
+    [InlineData("000000000000000000000000000000000000000g")]
+    public void TryComputeRootCommitHashBestEffort_RejectsMalformedParentHeader(string parentHash) {
+        const string childCommitHash = "3333333333333333333333333333333333333333";
+        var gitDir = Path.Combine(root, "malformed-parent-repository", ".git");
+        var refsDir = Path.Combine(gitDir, "refs", "heads");
+        var objectsDir = Path.Combine(gitDir, "objects", childCommitHash[..2]);
+        Directory.CreateDirectory(refsDir);
+        Directory.CreateDirectory(objectsDir);
+        File.WriteAllText(Path.Combine(gitDir, "HEAD"), "ref: refs/heads/main\n", Encoding.UTF8);
+        File.WriteAllText(Path.Combine(refsDir, "main"), childCommitHash + "\n", Encoding.UTF8);
+
+        var commitText = $"tree {new string('2', 40)}\nparent {parentHash}\n\nmalformed parent\n";
+        WriteLooseCommitObject(gitDir, childCommitHash, commitText);
+
+        GitDiscovery.TryComputeRootCommitHashBestEffort(gitDir, out _)
+            .Should().BeFalse("a malformed parent header must fail closed instead of being treated as a root commit");
+    }
+
     [Fact]
     public void TryComputeRootCommitHashBestEffort_TraversesRealRootCommitFromLinkedWorktree() {
         var repositoryRoot = CreateGitRepositoryWithRootAndChildCommit();
@@ -210,6 +231,17 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
             "commit", "--message", "child commit");
 
         return repositoryRoot;
+    }
+
+    private static void WriteLooseCommitObject(string gitDir, string commitHash, string commitText) {
+        var commitPayload = Encoding.UTF8.GetBytes($"commit {commitText.Length}\0{commitText}");
+        using var compressed = new MemoryStream();
+        using (var zlib = new ZLibStream(compressed, CompressionMode.Compress, leaveOpen: true))
+            zlib.Write(commitPayload, 0, commitPayload.Length);
+
+        File.WriteAllBytes(
+            Path.Combine(gitDir, "objects", commitHash[..2], commitHash[2..]),
+            compressed.ToArray());
     }
 
     private static string RunGit(string workingDirectory, params string[] arguments) {

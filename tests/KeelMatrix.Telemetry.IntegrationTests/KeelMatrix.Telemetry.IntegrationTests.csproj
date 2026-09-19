@@ -33,4 +33,11 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <Target Name="BuildNetstandardTelemetryAssembly" BeforeTargets="Build">
+    <MSBuild
+      Projects="$(MSBuildProjectDirectory)\..\..\src\KeelMatrix.Telemetry\KeelMatrix.Telemetry.csproj"
+      Targets="Build"
+      Properties="TargetFramework=netstandard2.0;Configuration=$(Configuration)" />
+  </Target>
+
 </Project>
