@@ -64,6 +64,32 @@ namespace KeelMatrix.Telemetry {
         internal const int MaxMarkerFiles = 1024;
         internal static readonly TimeSpan ProcessingStaleThreshold = TimeSpan.FromMinutes(5);
         internal const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+
+        internal static bool IsValidToolName(string? toolName) {
+            if (string.IsNullOrEmpty(toolName) || toolName.Length > ToolMaxLength)
+                return false;
+
+            if (!IsToolNameStartCharacter(toolName[0]))
+                return false;
+
+            for (var i = 1; i < toolName.Length; i++) {
+                var character = toolName[i];
+                if (!IsToolNameCharacter(character))
+                    return false;
+            }
+
+            return true;
+
+            static bool IsToolNameStartCharacter(char character) {
+                return character is >= 'a' and <= 'z' || character is >= '0' and <= '9';
+            }
+
+            static bool IsToolNameCharacter(char character) {
+                return IsToolNameStartCharacter(character)
+                    || character is '.' or '_' or '-';
+            }
+        }
+
         private static int processDisabled; // 0/1
         private static readonly object repositoryDisableDecisionLock = new();
         // Process-execution memoization for worker-thread repo-local disable discovery,

@@ -140,8 +140,8 @@ public sealed class TelemetrySerializerTests {
             toolVersion: toolVersion ?? runtimeContext.ToolVersion,
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
-            projectHash: projectHash ?? "abc",
-            installationHash: installationHash ?? "def",
+            projectHash: projectHash ?? TelemetrySerializerContractTestData.ProjectHash,
+            installationHash: installationHash ?? TelemetrySerializerContractTestData.InstallationHash,
             runtime: runtime ?? "dotnet",
             os: os ?? "linux",
             ci: ci ?? false,
@@ -162,8 +162,8 @@ public sealed class TelemetrySerializerTests {
             toolVersion: toolVersion ?? runtimeContext.ToolVersion,
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
-            projectHash: projectHash ?? "abc",
-            installationHash: installationHash ?? "def",
+            projectHash: projectHash ?? TelemetrySerializerContractTestData.ProjectHash,
+            installationHash: installationHash ?? TelemetrySerializerContractTestData.InstallationHash,
             week: week ?? "2026-W09");
     }
 

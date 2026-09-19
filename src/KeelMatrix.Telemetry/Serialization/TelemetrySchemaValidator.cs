@@ -11,7 +11,6 @@ namespace KeelMatrix.Telemetry.Serialization {
     internal static class TelemetrySchemaValidator {
 #pragma warning disable SYSLIB1045 // Convert to 'GeneratedRegexAttribute'.
         private static readonly Regex IsoWeekRegex = new(@"^\d{4}-W\d{2}$", RegexOptions.Compiled);
-        private static readonly Regex ToolRegex = new(@"^[a-z0-9][a-z0-9._-]{0,31}$", RegexOptions.Compiled);
 #pragma warning restore SYSLIB1045 // Convert to 'GeneratedRegexAttribute'.
 
         /// <summary>
@@ -24,7 +23,7 @@ namespace KeelMatrix.Telemetry.Serialization {
             if (!string.Equals(telemetryEvent.Tool, expectedToolName, StringComparison.Ordinal))
                 return false;
 
-            if (!ToolRegex.IsMatch(telemetryEvent.Tool) || telemetryEvent.Tool.Length > TelemetryConfig.ToolMaxLength)
+            if (!TelemetryConfig.IsValidToolName(telemetryEvent.Tool))
                 return false;
 
             if (telemetryEvent.ToolVersion.Length > TelemetryConfig.ToolVersionMaxLength)
@@ -47,7 +46,16 @@ namespace KeelMatrix.Telemetry.Serialization {
         }
 
         private static bool HasValidHash(string value, int maxLength) {
-            return !string.IsNullOrWhiteSpace(value) && value.Length <= maxLength;
+            if (value.Length != maxLength)
+                return false;
+
+            foreach (var character in value) {
+                if (character is not (>= '0' and <= '9')
+                    and not (>= 'a' and <= 'f'))
+                    return false;
+            }
+
+            return true;
         }
 
         private static bool ValidateActivation(ActivationEvent a) {

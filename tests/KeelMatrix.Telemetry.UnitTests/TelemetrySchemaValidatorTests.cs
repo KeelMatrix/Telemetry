@@ -8,6 +8,8 @@ using KeelMatrix.Telemetry.Serialization;
 namespace KeelMatrix.Telemetry.UnitTests;
 
 public sealed class TelemetrySchemaValidatorTests {
+    private const string ValidProjectHash = TelemetrySerializerContractTestData.ProjectHash;
+    private const string ValidInstallationHash = TelemetrySerializerContractTestData.InstallationHash;
     private static readonly string ValidTimestampUtc = new DateTimeOffset(2026, 02, 27, 0, 0, 0, TimeSpan.Zero)
         .UtcDateTime
         .ToString(TelemetryConfig.TimestampFormat, CultureInfo.InvariantCulture);
@@ -30,8 +32,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: "abc",
-            installationHash: "def",
+            projectHash: ValidProjectHash,
+            installationHash: ValidInstallationHash,
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -51,8 +53,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: tooLong,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: "abc",
-            installationHash: "def",
+            projectHash: ValidProjectHash,
+            installationHash: ValidInstallationHash,
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -72,8 +74,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: tooLong,
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: "abc",
-            installationHash: "def",
+            projectHash: ValidProjectHash,
+            installationHash: ValidInstallationHash,
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -95,8 +97,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: projectHashTooLong ? tooLong : "abc",
-            installationHash: projectHashTooLong ? "def" : tooLong,
+            projectHash: projectHashTooLong ? tooLong : ValidProjectHash,
+            installationHash: projectHashTooLong ? ValidInstallationHash : tooLong,
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -114,6 +116,27 @@ public sealed class TelemetrySchemaValidatorTests {
         var evt = CreateActivation(runtimeContext, tool: toolName);
 
         TelemetrySchemaValidator.IsValid(evt, toolName).Should().BeFalse();
+    }
+
+    [Theory]
+    [MemberData(nameof(GetWorkerToolContractCases))]
+    public void IsValid_MatchesWorkerToolGrammar(string toolName, bool expectedValid) {
+        var runtimeContext = CreateRuntimeContext(toolName);
+        var evt = CreateActivation(runtimeContext, tool: toolName);
+
+        TelemetrySchemaValidator.IsValid(evt, toolName).Should().Be(expectedValid);
+    }
+
+    [Theory]
+    [MemberData(nameof(GetInvalidHashCases))]
+    public void IsValid_RejectsHashesOutsideWorkerContract(string invalidHash) {
+        var runtimeContext = CreateRuntimeContext("hash_contract");
+        var evt = CreateActivation(
+            runtimeContext,
+            projectHash: invalidHash,
+            installationHash: ValidInstallationHash);
+
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
     }
 
     [Fact]
@@ -135,8 +158,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: "abc",
-            installationHash: "def",
+            projectHash: ValidProjectHash,
+            installationHash: ValidInstallationHash,
             runtime: runtime,
             os: os,
             ci: false,
@@ -155,8 +178,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: "abc",
-            installationHash: "def",
+            projectHash: ValidProjectHash,
+            installationHash: ValidInstallationHash,
             runtime: "dotnet",
             os: "linux",
             ci: false,
@@ -181,8 +204,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: runtimeContext.ToolVersion,
             telemetryVersion: "1.0.0",
             schemaVersion: TelemetryConfig.SchemaVersion,
-            projectHash: "abc",
-            installationHash: "def",
+            projectHash: ValidProjectHash,
+            installationHash: ValidInstallationHash,
             week: week);
 
         TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
@@ -199,8 +222,8 @@ public sealed class TelemetrySchemaValidatorTests {
             runtimeContext.ToolVersion,
             "1.0.0",
             TelemetryConfig.SchemaVersion,
-            "abc",
-            "def",
+            ValidProjectHash,
+            ValidInstallationHash,
             week);
 
         TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeTrue();
@@ -227,8 +250,8 @@ public sealed class TelemetrySchemaValidatorTests {
             toolVersion: toolVersion ?? runtimeContext.ToolVersion,
             telemetryVersion: telemetryVersion ?? "1.0.0",
             schemaVersion: schemaVersion ?? TelemetryConfig.SchemaVersion,
-            projectHash: projectHash ?? "abc",
-            installationHash: installationHash ?? "def",
+            projectHash: projectHash ?? ValidProjectHash,
+            installationHash: installationHash ?? ValidInstallationHash,
             runtime: runtime ?? "dotnet",
             os: os ?? "linux",
             ci: ci ?? false,
@@ -272,5 +295,34 @@ public sealed class TelemetrySchemaValidatorTests {
         data.Add("not-a-timestamp");
 
         return data;
+    }
+
+    public static TheoryData<string, bool> GetWorkerToolContractCases() {
+        var data = new TheoryData<string, bool> {
+            { "a", true },
+            { "a.b_c-d", true },
+            { "z9.tool_name-v1", true },
+            { "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true },
+            { "../tool", false },
+            { "a/b", false },
+            { "A-tool", false },
+            { ".tool", false },
+            { "-tool", false },
+            { "_tool", false },
+            { "t" + new string('t', 32), false },
+            { "My Tool", false },
+            { "My/Tool", false },
+            { " Tool ", false },
+            { "étool", false }
+        };
+        return data;
+    }
+
+    public static TheoryData<string> GetInvalidHashCases() {
+        return new TheoryData<string> {
+            "abc",
+            new string('A', 64),
+            new string('g', 64)
+        };
     }
 }

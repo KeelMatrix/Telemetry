@@ -19,8 +19,8 @@ namespace KeelMatrix.Telemetry {
         /// Initializes a telemetry client for the specified tool.
         /// </summary>
         /// <param name="toolName">
-        /// A stable identifier for the consuming tool or package. The value is used to derive per-user telemetry storage
-        /// and to label emitted events.
+        /// A stable identifier for the consuming tool or package. The value is lowercased for telemetry and must produce
+        /// a Worker-compatible key matching <c>[a-z0-9][a-z0-9._-]{0,31}</c>. Invalid values produce a no-op client.
         /// </param>
         /// <param name="toolType">
         /// A type from the consuming assembly. The containing assembly version is used as the tool version reported in telemetry.
@@ -51,6 +51,9 @@ namespace KeelMatrix.Telemetry {
             Func<TelemetryRuntimeContext, RuntimeInfo, IProjectIdentityProvider>? projectIdentityProviderFactory) {
             try {
                 if (TelemetryConfig.IsTelemetryDisabled())
+                    return new NullTelemetryClient();
+
+                if (!TelemetryConfig.IsValidToolName(toolName.ToLowerInvariant()))
                     return new NullTelemetryClient();
 
                 TelemetryDeliveryWorker worker;
