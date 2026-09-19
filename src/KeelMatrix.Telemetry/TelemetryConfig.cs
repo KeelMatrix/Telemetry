@@ -66,7 +66,7 @@ namespace KeelMatrix.Telemetry {
         internal const string TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
 
         internal static bool IsValidToolName(string? toolName) {
-            if (string.IsNullOrEmpty(toolName) || toolName.Length > ToolMaxLength)
+            if (toolName is null || toolName.Length == 0 || toolName.Length > ToolMaxLength)
                 return false;
 
             var nonNullToolName = toolName!;
