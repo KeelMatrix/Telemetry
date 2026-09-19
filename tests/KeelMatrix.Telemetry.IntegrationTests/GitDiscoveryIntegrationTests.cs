@@ -152,7 +152,7 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
         var objectBytes = File.ReadAllBytes(objectPath);
         objectBytes.Length.Should().BeGreaterThan(4);
         objectBytes[^1] ^= 0xff;
-        File.SetAttributes(objectPath, FileAttributes.Normal);
+        File.Delete(objectPath);
         File.WriteAllBytes(objectPath, objectBytes);
 
         GitDiscovery.TryComputeRootCommitHashBestEffort(
