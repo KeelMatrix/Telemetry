@@ -139,6 +139,27 @@ public sealed class GitDiscoveryIntegrationTests : IDisposable {
     }
 
     [Fact]
+    public void TryComputeRootCommitHashBestEffort_RejectsLooseObjectWithCorruptedZlibTrailer() {
+        var repositoryRoot = CreateGitRepositoryWithRootAndChildCommit();
+        var rootCommitHash = RunGit(repositoryRoot, "rev-parse", "HEAD~1").Trim().ToLowerInvariant();
+        var objectPath = Path.Combine(
+            repositoryRoot,
+            ".git",
+            "objects",
+            rootCommitHash[..2],
+            rootCommitHash[2..]);
+
+        var objectBytes = File.ReadAllBytes(objectPath);
+        objectBytes.Length.Should().BeGreaterThan(4);
+        objectBytes[^1] ^= 0xff;
+        File.WriteAllBytes(objectPath, objectBytes);
+
+        GitDiscovery.TryComputeRootCommitHashBestEffort(
+            Path.Combine(repositoryRoot, ".git"),
+            out _).Should().BeFalse("a loose Git object with an invalid Adler-32 trailer is corrupt");
+    }
+
+    [Fact]
     public void TryComputeRootCommitHashBestEffort_TraversesRealRootCommitFromLinkedWorktree() {
         var repositoryRoot = CreateGitRepositoryWithRootAndChildCommit();
         var linkedWorktree = Path.Combine(root, "linked-worktree");

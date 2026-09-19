@@ -295,31 +295,35 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 using var fs = new FileStream(objPath, FileMode.Open, FileAccess.Read, FileShare.Read);
                 Stream decompressedStream;
 #if NET8_0_OR_GREATER
-                decompressedStream = new ZLibStream(fs, CompressionMode.Decompress);
+                decompressedStream = new ZLibStream(fs, CompressionMode.Decompress, leaveOpen: true);
 #else
                 if (!TrySkipZlibHeader(fs))
                     return false;
 
-                decompressedStream = new DeflateStream(fs, CompressionMode.Decompress);
+                decompressedStream = new DeflateStream(fs, CompressionMode.Decompress, leaveOpen: true);
 #endif
+                byte[] decompressed;
                 using (decompressedStream) {
-                    if (!TryReadAllBytesCapped(decompressedStream, TelemetryConfig.ProjectIdentity.MaxObjectBytesDecompressed, out var decompressed))
+                    if (!TryReadAllBytesCapped(decompressedStream, TelemetryConfig.ProjectIdentity.MaxObjectBytesDecompressed, out decompressed))
                         return false;
-
-                    // Format: "commit <size>\0<content>"
-                    int nul = Array.IndexOf(decompressed, (byte)0);
-                    if (nul <= 0 || nul >= decompressed.Length - 1)
-                        return false;
-
-                    // Validate type prefix starts with "commit ".
-                    // (Avoid parsing trees/blobs incorrectly.)
-                    var header = Encoding.ASCII.GetString(decompressed, 0, nul);
-                    if (!header.StartsWith("commit ", StringComparison.Ordinal))
-                        return false;
-
-                    commitText = Encoding.UTF8.GetString(decompressed, nul + 1, decompressed.Length - (nul + 1));
-                    return commitText.Length > 0;
                 }
+
+                if (!TryValidateZlibTrailer(fs, decompressed))
+                    return false;
+
+                // Format: "commit <size>\0<content>"
+                int nul = Array.IndexOf(decompressed, (byte)0);
+                if (nul <= 0 || nul >= decompressed.Length - 1)
+                    return false;
+
+                // Validate type prefix starts with "commit ".
+                // (Avoid parsing trees/blobs incorrectly.)
+                var header = Encoding.ASCII.GetString(decompressed, 0, nul);
+                if (!header.StartsWith("commit ", StringComparison.Ordinal))
+                    return false;
+
+                commitText = Encoding.UTF8.GetString(decompressed, nul + 1, decompressed.Length - (nul + 1));
+                return commitText.Length > 0;
             }
             catch {
                 return false;
@@ -431,6 +435,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             var dictionaryId = new byte[4];
             return TryReadExactly(stream, dictionaryId, 0, dictionaryId.Length);
         }
+#endif
 
         private static bool TryReadExactly(Stream stream, byte[] buffer, int offset, int count) {
             int total = 0;
@@ -444,7 +449,6 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
             return true;
         }
-#endif
 
         private static bool TryReadTextFileCapped(string path, int maxBytes, out string text) {
             text = string.Empty;
@@ -487,6 +491,35 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
                 bytes = ms.ToArray();
                 return bytes.Length > 0;
+            }
+            catch {
+                return false;
+            }
+        }
+
+        private static bool TryValidateZlibTrailer(Stream stream, byte[] decompressed) {
+            try {
+                if (!stream.CanSeek || stream.Length < 4)
+                    return false;
+
+                stream.Seek(-4, SeekOrigin.End);
+                var trailer = new byte[4];
+                if (!TryReadExactly(stream, trailer, 0, trailer.Length))
+                    return false;
+
+                uint expected = ((uint)trailer[0] << 24)
+                    | ((uint)trailer[1] << 16)
+                    | ((uint)trailer[2] << 8)
+                    | trailer[3];
+
+                uint adler = 1;
+                uint adlerSum = 0;
+                foreach (var value in decompressed) {
+                    adler = (adler + value) % 65521;
+                    adlerSum = (adlerSum + adler) % 65521;
+                }
+
+                return (adlerSum << 16 | adler) == expected;
             }
             catch {
                 return false;
