@@ -408,14 +408,39 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         var queue = harness.CreateQueue();
         queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
 
-        using var worker = harness.CreateWorker();
+        var retryBackoffStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var worker = harness.CreateWorker(() => retryBackoffStarted.TrySetResult(true));
         await sender.FirstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
+        await retryBackoffStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         worker.RequestActivation();
 
         await WaitUntilAsync(
             () => sender.Received.Any(json => ContainsEvent(json, "activation")),
             TimeSpan.FromSeconds(8));
+
+        sender.AttemptCount.Should().BeGreaterThanOrEqualTo(2, "the failed backlog item must remain scheduled for retry");
+    }
+
+    [Fact]
+    public async Task ControlledInterleaving_PreservesHeartbeatRequestAcrossRetrySignal() {
+        using var sender = new RetryOnceTelemetrySender();
+        using var harness = new WorkerHarness(sender);
+        var queue = harness.CreateQueue();
+        queue.Enqueue("{\"event\":\"backlog\"}").Should().BeTrue();
+
+        var retryBackoffStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var worker = harness.CreateWorker(() => retryBackoffStarted.TrySetResult(true));
+        await sender.FirstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await retryBackoffStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        worker.RequestHeartbeat();
+
+        await WaitUntilAsync(
+            () => sender.Received.Any(json => ContainsEvent(json, "heartbeat")),
+            TimeSpan.FromSeconds(8));
+
+        sender.AttemptCount.Should().BeGreaterThanOrEqualTo(2, "the failed backlog item must remain scheduled for retry");
     }
 
     [Fact]
@@ -429,6 +454,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         await sender.FirstRequestStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         var disposeTask = Task.Run(worker.Dispose);
+        await sender.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await disposeTask.WaitAsync(TimeSpan.FromSeconds(5));
         disposeTask.IsCompletedSuccessfully.Should().BeTrue();
     }
@@ -546,8 +572,13 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
             return CountFiles(MarkersDir, pattern);
         }
 
-        public TelemetryDeliveryWorker CreateWorker() {
-            return new TelemetryDeliveryWorker(RuntimeContext, RuntimeInfo, new ProjectIdentityProvider(RuntimeContext, RuntimeInfo), telemetrySender);
+        public TelemetryDeliveryWorker CreateWorker(Action? retryBackoffStartedForTests = null) {
+            return new TelemetryDeliveryWorker(
+                RuntimeContext,
+                RuntimeInfo,
+                new ProjectIdentityProvider(RuntimeContext, RuntimeInfo),
+                telemetrySender,
+                retryBackoffStartedForTests);
         }
 
         public void Dispose() {
@@ -641,13 +672,20 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         private int requestCount;
 
         public TaskCompletionSource<bool> FirstRequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<bool> CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ConcurrentQueue<string> Received { get; } = new();
 
         public async Task<bool> TrySendAsync(string json, CancellationToken token) {
             Received.Enqueue(json);
             if (Interlocked.Increment(ref requestCount) == 1) {
                 FirstRequestStarted.TrySetResult(true);
-                await releaseFirst.Task.WaitAsync(token);
+                try {
+                    await releaseFirst.Task.WaitAsync(token);
+                }
+                catch (OperationCanceledException) {
+                    CancellationObserved.TrySetResult(true);
+                    throw;
+                }
             }
 
             return true;
@@ -663,6 +701,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         public TaskCompletionSource<bool> FirstAttemptStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ConcurrentQueue<string> Received { get; } = new();
+        public int AttemptCount => Volatile.Read(ref attempts);
 
         public Task<bool> TrySendAsync(string json, CancellationToken token) {
             token.ThrowIfCancellationRequested();

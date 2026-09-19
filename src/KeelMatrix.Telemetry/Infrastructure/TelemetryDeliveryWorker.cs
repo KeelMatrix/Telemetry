@@ -14,6 +14,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private readonly IProjectIdentityProvider projectIdentityProvider;
         private ITelemetryQueue? queue;
         private readonly ITelemetrySender httpSender;
+        private readonly Action? retryBackoffStartedForTests;
 
         private readonly SemaphoreSlim signal = new(0, 1);
         private readonly CancellationTokenSource cts = new();
@@ -69,11 +70,13 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             TelemetryRuntimeContext runtimeContext,
             RuntimeInfo runtimeInfo,
             IProjectIdentityProvider projectIdentityProvider,
-            ITelemetrySender telemetrySender) {
+            ITelemetrySender telemetrySender,
+            Action? retryBackoffStartedForTests = null) {
             this.runtimeContext = runtimeContext;
             this.runtimeInfo = runtimeInfo;
             this.projectIdentityProvider = projectIdentityProvider ?? throw new ArgumentNullException(nameof(projectIdentityProvider));
             httpSender = telemetrySender ?? throw new ArgumentNullException(nameof(telemetrySender));
+            this.retryBackoffStartedForTests = retryBackoffStartedForTests;
 
             _workerTask = Task.Run(RunAsync);
 
@@ -280,6 +283,13 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     }
 
                     if (anyFailed) {
+                        try {
+                            retryBackoffStartedForTests?.Invoke();
+                        }
+                        catch {
+                            // Test synchronization must never affect delivery.
+                        }
+
                         await ApplyBackoff(token).ConfigureAwait(false);
                         Signal(); // ensure retry even without new enqueue
                         break;
