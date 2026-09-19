@@ -28,8 +28,8 @@ internal sealed class TestRuntimeScope : IDisposable {
     public string RootDir { get; }
     public string ProjectHash { get; }
     public string CurrentWeek { get; }
-    public string MarkerDir => Path.Combine(RootDir, "markers");
     public string QueueRootDir => Path.Combine(RootDir, "telemetry.queue");
+    public string MarkerDir => Path.Combine(RootDir, "markers");
     public string PendingDir => Path.Combine(QueueRootDir, "pending");
     public string ProcessingDir => Path.Combine(QueueRootDir, "processing");
     public string DeadDir => Path.Combine(QueueRootDir, "dead");
@@ -44,7 +44,7 @@ internal sealed class TestRuntimeScope : IDisposable {
     }
 
     public ITelemetryQueue CreateQueue() {
-        return DurableTelemetryQueue.CreateSafe(RuntimeContext);
+        return DurableTelemetryQueue.CreateSafe(RuntimeContext)!;
     }
 
     public MachineSaltProvider CreateMachineSaltProvider() {

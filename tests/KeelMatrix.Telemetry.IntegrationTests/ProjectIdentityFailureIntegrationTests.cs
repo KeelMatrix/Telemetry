@@ -98,7 +98,7 @@ public sealed class ProjectIdentityFailureIntegrationTests {
         public string ProcessingDir => Path.Combine(rootDir, "telemetry.queue", "processing");
 
         public ITelemetryQueue CreateQueue() {
-            return DurableTelemetryQueue.CreateSafe(RuntimeContext);
+            return DurableTelemetryQueue.CreateSafe(RuntimeContext)!;
         }
 
         public ClientScope CreateClientScope() {

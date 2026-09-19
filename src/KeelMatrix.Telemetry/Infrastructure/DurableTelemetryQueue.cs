@@ -12,15 +12,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
     internal sealed class DurableTelemetryQueue : ITelemetryQueue {
         private const string QueueFileTimestampFormat = "yyyyMMddHHmmssfffffff";
         private const int QueueFileTimestampLength = 21;
+        private const int MaxEnvelopeBytes = 4096;
 
         private readonly TelemetryRuntimeContext runtimeContext;
         private readonly string pendingDir;
         private readonly string processingDir;
         private readonly string deadLetterDir;
 
-        internal static ITelemetryQueue CreateSafe(TelemetryRuntimeContext runtimeContext) {
+        internal static ITelemetryQueue? CreateSafe(TelemetryRuntimeContext runtimeContext) {
             try { return new DurableTelemetryQueue(runtimeContext); }
-            catch { return new NullTelemetryQueue(); }
+            catch { return null; }
         }
 
         private DurableTelemetryQueue(TelemetryRuntimeContext runtimeContext) {
@@ -42,21 +43,79 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         private static void CleanupTmpFiles(string dir) {
+            string[] files;
             try {
-                foreach (var file in Directory.EnumerateFiles(dir, "*.tmp")) {
-                    SafeDelete(file);
-                }
+                files = Directory.EnumerateFiles(dir, "*.tmp").ToArray();
             }
             catch {
                 // swallow
+                return;
+            }
+
+            var nowUtc = DateTime.UtcNow;
+            foreach (var file in files) {
+                try {
+                    var lastWriteUtc = File.GetLastWriteTimeUtc(file);
+                    if (lastWriteUtc == DateTime.MinValue || lastWriteUtc > nowUtc)
+                        continue;
+
+                    if (nowUtc - lastWriteUtc < TelemetryConfig.ProcessingStaleThreshold)
+                        continue;
+
+                    var ownershipPath = file + ".lock";
+                    if (File.Exists(ownershipPath)) {
+                        // A producer keeps this sidecar open until its temp file is moved.
+                        // An abandoned sidecar can be acquired and removed with the temp.
+                        try {
+                            using (new FileStream(ownershipPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+                        }
+                        catch {
+                            continue;
+                        }
+
+                        SafeDelete(file);
+                        SafeDelete(ownershipPath);
+                        continue;
+                    }
+
+                    // A writer owns its uniquely named temp file while it is open. Do not
+                    // remove it if another process still holds that ownership lock.
+                    using (new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None)) { }
+                    SafeDelete(file);
+                }
+                catch {
+                    // The file may be an active writer or may have disappeared concurrently.
+                }
             }
         }
 
         private void CrashRecovery() {
-            var nowUtc = DateTime.UtcNow;
+            RecoverStaleClaims();
+        }
 
-            foreach (var file in Directory.EnumerateFiles(processingDir, "*.json")) {
+        /// <summary>
+        /// Returns claims whose processing lease has expired to pending. The last-write time
+        /// is the lease heartbeat; a live claim is not reclaimed while it remains non-stale.
+        /// Lease expiry can produce a duplicate delivery window, so delivery is best-effort
+        /// rather than exactly-once.
+        /// </summary>
+        private void RecoverStaleClaims() {
+            var nowUtc = DateTime.UtcNow;
+            string[] files;
+
+            try {
+                files = Directory.EnumerateFiles(processingDir, "*.json").ToArray();
+            }
+            catch {
+                return;
+            }
+
+            foreach (var file in files) {
                 try {
+                    // Only production-generated claim names are recoverable.
+                    if (!TryParseTimestampFromFilename(file, out _, out _))
+                        continue;
+
                     DateTime lastWriteUtc;
                     try {
                         lastWriteUtc = File.GetLastWriteTimeUtc(file);
@@ -75,7 +134,10 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         continue;
 
                     var target = Path.Combine(pendingDir, Path.GetFileName(file));
-                    try { File.Delete(target); } catch { /* file may not exist; ignore */ }
+                    // Never overwrite a pending copy another process may already own.
+                    if (File.Exists(target))
+                        continue;
+
                     File.Move(file, target);
                 }
                 catch { /* swallow */ }
@@ -85,7 +147,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// <summary>
         /// Enqueues a payload to disk using atomic tmp + rename.
         /// </summary>
-        public void Enqueue(string payloadJson) {
+        public bool Enqueue(string payloadJson) {
             try {
                 EnforceLimit();
 
@@ -93,30 +155,18 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 var finalPath = Path.Combine(
                     pendingDir,
                     $"{envelope.EnqueuedUtc.UtcDateTime.ToString(QueueFileTimestampFormat, CultureInfo.InvariantCulture)}_{envelope.Id}.json");
-                var tmpPath = finalPath + ".tmp";
-
-                // Write fully and close the file BEFORE attempting the atomic move.
-                File.WriteAllText(tmpPath, envelope.Serialize(), Encoding.UTF8);
-
-                try {
-#if NET8_0_OR_GREATER
-                    File.Move(tmpPath, finalPath, overwrite: true);
-#else
-                // netstandard2.0: best-effort overwrite emulation.
-                try { File.Delete(finalPath); } catch { /* ignore */ }
-                File.Move(tmpPath, finalPath);
-#endif
-                }
-                catch {
-                    // If move fails, do not leave tmp behind.
-                    try { File.Delete(tmpPath); } catch { /* swallow */ }
-                }
+                // Write fully and close a uniquely owned temp file BEFORE attempting the atomic move.
+                if (!TryWritePendingAtomically(finalPath, envelope.Serialize()))
+                    return false;
 
                 try { EnforceLimitOnDirectory(pendingDir, TelemetryConfig.MaxPendingItems); }
                 catch { /* swallow */ }
+
+                return true;
             }
             catch {
                 // Must never affect caller
+                return false;
             }
         }
 
@@ -128,7 +178,18 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             var results = new List<ClaimedItem>();
 
             try {
-                foreach (var file in EnumerateFilesOrderedByFilenameTimestamp(pendingDir).Take(maxItems)) {
+                if (maxItems <= 0)
+                    return results;
+
+                // Recovery is repeated on every claim attempt so a claim that was young at
+                // startup becomes eligible later without another restart or tracking call.
+                RecoverStaleClaims();
+
+                var candidatesExamined = 0;
+                foreach (var file in EnumerateFilesOrderedByFilenameTimestamp(pendingDir)) {
+                    if (results.Count >= maxItems || candidatesExamined++ >= TelemetryConfig.MaxPendingItems)
+                        break;
+
                     var name = Path.GetFileName(file);
                     var claimedPath = Path.Combine(processingDir, name);
 
@@ -141,21 +202,12 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         continue; // another process claimed it
                     }
 
-                    string json;
-                    try {
-                        json = File.ReadAllText(claimedPath);
-                    }
-                    catch {
+                    if (!TryReadBoundedText(claimedPath, MaxEnvelopeBytes, out var json)) {
                         SafeDelete(claimedPath);
                         continue;
                     }
 
                     TelemetryEnvelope envelope;
-                    if (json.Length > 4096) {
-                        SafeDelete(claimedPath);
-                        continue;
-                    }
-
                     try {
                         envelope = TelemetryEnvelope.Deserialize(json);
                     }
@@ -234,34 +286,65 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// Returns true only if the final file is known to exist with the written content.
         /// </summary>
         private static bool TryWritePendingAtomically(string target, string content) {
-            string tmp = target + ".tmp";
+            string tmp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            string ownershipPath = tmp + ".lock";
 
             try {
-                File.WriteAllText(tmp, content);
+                // Keep ownership alive across the write/rename gap. This prevents another
+                // process from treating a paused producer's temp file as orphaned.
+                using (new FileStream(ownershipPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None)) {
+                    File.WriteAllText(tmp, content, Encoding.UTF8);
 
 #if NET8_0_OR_GREATER
-                // On modern runtimes, overwrite is supported directly.
-                File.Move(tmp, target, overwrite: true);
-                return true;
+                    // On modern runtimes, overwrite is supported directly.
+                    File.Move(tmp, target, overwrite: true);
+                    return true;
 #else
-        // netstandard2.0: emulate overwrite safely.
-        // Important: we must not claim success unless the final file exists.
-        try {
-            if (File.Exists(target))
-                File.Delete(target);
+                    // netstandard2.0: do not replace an existing target after deleting it;
+                    // preserving the existing pending copy is safer than risking data loss.
+                    if (File.Exists(target))
+                        return false;
 
-            File.Move(tmp, target);
-            return File.Exists(target);
-        }
-        catch {
-            // If move fails, do not delete processing file; just cleanup tmp best-effort.
-            try { File.Delete(tmp); } catch { /* swallow */ }
-            return false;
-        }
+                    File.Move(tmp, target);
+                    return File.Exists(target);
 #endif
+                }
             }
             catch {
-                try { File.Delete(tmp); } catch { /* swallow */ }
+                SafeDelete(tmp);
+                return false;
+            }
+            finally {
+                SafeDelete(ownershipPath);
+            }
+        }
+
+        private static bool TryReadBoundedText(string path, int maxBytes, out string text) {
+            text = string.Empty;
+
+            try {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                if (stream.Length > maxBytes)
+                    return false;
+
+                using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                var builder = new StringBuilder(Math.Min(maxBytes, 512));
+                var buffer = new char[512];
+                var totalChars = 0;
+
+                int read;
+                while ((read = reader.Read(buffer, 0, buffer.Length)) > 0) {
+                    totalChars += read;
+                    if (totalChars > maxBytes)
+                        return false;
+
+                    builder.Append(buffer, 0, read);
+                }
+
+                text = builder.ToString();
+                return Encoding.UTF8.GetByteCount(text) <= maxBytes;
+            }
+            catch {
                 return false;
             }
         }

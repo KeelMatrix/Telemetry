@@ -110,6 +110,66 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     }
 
     [Fact]
+    public async Task ActivationPlanning_DoesNotCommitMarker_WhenQueueInitializationFails_ThenRecovers() {
+        using var harness = new WorkerHarness();
+        Directory.CreateDirectory(harness.QueueRootDir);
+        File.WriteAllText(harness.PendingDir, "blocked");
+
+        using var worker = harness.CreateWorker();
+        worker.RequestActivation();
+
+        await Task.Delay(300);
+
+        harness.CountMarkerFiles("activation.*.json").Should().Be(0);
+        harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
+
+        File.Delete(harness.PendingDir);
+
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
+        harness.CountMarkerFiles("activation.*.json").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task HeartbeatPlanning_DoesNotCommitMarker_WhenQueueInitializationFails_ThenRecovers() {
+        using var harness = new WorkerHarness();
+        Directory.CreateDirectory(harness.QueueRootDir);
+        File.WriteAllText(harness.PendingDir, "blocked");
+
+        using var worker = harness.CreateWorker();
+        worker.RequestHeartbeat();
+
+        await Task.Delay(300);
+
+        harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
+
+        File.Delete(harness.PendingDir);
+
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "heartbeat"), TimeSpan.FromSeconds(5));
+        harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ActivationPlanning_DoesNotCommitMarker_WhenQueueWriteFails_ThenRecovers() {
+        using var harness = new WorkerHarness();
+        using var worker = harness.CreateWorker();
+
+        await WaitUntilAsync(() => Directory.Exists(harness.PendingDir), TimeSpan.FromSeconds(5));
+        Directory.Delete(harness.PendingDir);
+        File.WriteAllText(harness.PendingDir, "blocked");
+
+        worker.RequestActivation();
+        await Task.Delay(300);
+
+        harness.CountMarkerFiles("activation.*.json").Should().Be(0);
+        harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
+
+        File.Delete(harness.PendingDir);
+
+        await WaitUntilAsync(() => harness.Sender.Received.Any(r => r.Event == "activation"), TimeSpan.FromSeconds(5));
+        harness.CountMarkerFiles("activation.*.json").Should().Be(1);
+    }
+
+    [Fact]
     public async Task ActivationPlanning_SuppressesHeartbeatForSameWeek() {
         using var harness = new WorkerHarness();
         using var worker = harness.CreateWorker();
@@ -321,6 +381,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         public TelemetryRuntimeContext RuntimeContext { get; }
         public RuntimeInfo RuntimeInfo { get; }
         public string PendingDir => Path.Combine(rootDir, "telemetry.queue", "pending");
+        public string QueueRootDir => Path.Combine(rootDir, "telemetry.queue");
         public string ProcessingDir => Path.Combine(rootDir, "telemetry.queue", "processing");
         public string MarkersDir => Path.Combine(rootDir, "markers");
 #pragma warning disable S2325 // Methods and properties that don't access instance data should be static
@@ -329,7 +390,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 #pragma warning restore CA1822, S2325
 
         public ITelemetryQueue CreateQueue() {
-            return DurableTelemetryQueue.CreateSafe(RuntimeContext);
+            return DurableTelemetryQueue.CreateSafe(RuntimeContext)!;
         }
 
         public int CountMarkerFiles(string pattern) {

@@ -32,6 +32,14 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
         private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan InitialBackoff = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan QueueRecoveryPollInterval = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan InitialQueueRecoveryDelay = TimeSpan.FromMilliseconds(100);
+        private static readonly TimeSpan MaxQueueRecoveryDelay = TimeSpan.FromSeconds(1);
+        private const int MaxQueueRecoveryAttempts = 8;
+
+        private int queueRecoveryResetRequested;
+        private int queueInitializationFailures;
+        private int queueWriteFailures;
 
         private static readonly ThreadLocal<Random> JitterRandom =
             new(() => new Random(unchecked((Environment.TickCount * 31) + Environment.CurrentManagedThreadId)));
@@ -78,6 +86,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         internal void RequestActivation() {
             // Set flag; no I/O.
             Interlocked.Exchange(ref activationRequested, 1);
+            Interlocked.Exchange(ref queueRecoveryResetRequested, 1);
             Signal();
         }
 
@@ -87,6 +96,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         internal void RequestHeartbeat() {
             // Set flag; no I/O.
             Interlocked.Exchange(ref heartbeatRequested, 1);
+            Interlocked.Exchange(ref queueRecoveryResetRequested, 1);
             Signal();
         }
 
@@ -108,10 +118,17 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
             while (!token.IsCancellationRequested) {
                 try {
-                    await signal.WaitAsync(token).ConfigureAwait(false);
+                    // The timeout gives stale processing claims a bounded repeated recovery
+                    // opportunity even when the process receives no new tracking call.
+                    _ = await signal.WaitAsync(QueueRecoveryPollInterval, token).ConfigureAwait(false);
                 }
                 catch {
                     break;
+                }
+
+                if (Interlocked.Exchange(ref queueRecoveryResetRequested, 0) == 1) {
+                    queueInitializationFailures = 0;
+                    queueWriteFailures = 0;
                 }
 
                 if (TelemetryConfig.IsTelemetryDisabled() || TelemetryConfig.ResolveRepositoryTelemetryDisableOnWorkerThread()) {
@@ -127,7 +144,21 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     // swallow
                 }
 
+                if (queue is null && queueInitializationFailures >= MaxQueueRecoveryAttempts)
+                    continue;
+
                 var telemetryQueue = GetQueueOnWorkerThread();
+                if (telemetryQueue is null) {
+                    queueInitializationFailures++;
+                    if (queueInitializationFailures <= MaxQueueRecoveryAttempts) {
+                        await ApplyQueueRecoveryDelay(queueInitializationFailures, token).ConfigureAwait(false);
+                        Signal();
+                    }
+
+                    continue;
+                }
+
+                queueInitializationFailures = 0;
 
                 // Resolve telemetry identities once on the worker thread (best-effort).
                 if (!identitiesResolved && !TelemetryConfig.IsTelemetryDisabled()) {
@@ -143,11 +174,28 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 }
 
                 // Plan & enqueue new telemetry based on requests (marker I/O happens here, not on caller)
+                bool requestsNeedRetry = false;
                 try {
-                    ProcessRequestsOnWorkerThread(telemetryQueue);
+                    requestsNeedRetry = ProcessRequestsOnWorkerThread(telemetryQueue);
                 }
                 catch {
                     // swallow; telemetry must never impact host
+                }
+
+                if (requestsNeedRetry) {
+                    queueWriteFailures++;
+                    if (queueWriteFailures <= MaxQueueRecoveryAttempts) {
+                        await ApplyQueueRecoveryDelay(queueWriteFailures, token).ConfigureAwait(false);
+                        Signal();
+                    }
+                    else {
+                        // Best-effort capacity is bounded. The request flags remain set as
+                        // durable intent, but no further I/O is attempted until a later
+                        // public request resets this budget.
+                    }
+                }
+                else {
+                    queueWriteFailures = 0;
                 }
 
                 // Deliver any queued items (including backlog from previous runs)
@@ -205,16 +253,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         /// Performs all I/O needed to decide whether to emit activation/heartbeat,
         /// serializes events, enqueues them durably, then commits marker files.
         /// </summary>
-        private void ProcessRequestsOnWorkerThread(ITelemetryQueue telemetryQueue) {
+        private bool ProcessRequestsOnWorkerThread(ITelemetryQueue telemetryQueue) {
             if (TelemetryConfig.IsTelemetryDisabled())
-                return;
+                return false;
 
             // Drain request flags first to avoid any compute when nothing was requested.
             var doActivation = Interlocked.Exchange(ref activationRequested, 0) == 1;
             var doHeartbeat = Interlocked.Exchange(ref heartbeatRequested, 0) == 1;
 
             if (!doActivation && !doHeartbeat)
-                return;
+                return false;
 
             // Resolve telemetry identities on the worker thread (cached for process lifetime).
             ResolvedTelemetryIdentity identities;
@@ -224,16 +272,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             catch {
                 // Broken identity state must prevent all emission for this process.
                 TelemetryConfig.DisableTelemetryForCurrentProcess();
-                return;
+                return false;
             }
 
             if (string.IsNullOrWhiteSpace(identities.InstallationHash)) {
                 TelemetryConfig.DisableTelemetryForCurrentProcess();
-                return;
+                return false;
             }
 
             if (!identities.HasProjectIdentity)
-                return;
+                return false;
 
             // Create dispatcher/state on worker thread (marker I/O happens inside TelemetryState).
             dispatcher ??= new TelemetryDispatcher(runtimeContext, runtimeInfo, identities);
@@ -241,6 +289,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             // Needed for "activation suppresses heartbeat until next week".
             var currentWeek = TelemetryClock.GetCurrentIsoWeek();
             bool activationSentThisRun = false;
+            bool requestsNeedRetry = false;
 
             if (doActivation) {
                 try {
@@ -249,14 +298,22 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
                         if (json != null) {
                             // Durable queue write + marker commit are I/O; safe here.
-                            telemetryQueue.Enqueue(json);
-                            dispatcher.CommitActivation();
-                            activationSentThisRun = true;
+                            if (telemetryQueue.Enqueue(json)) {
+                                dispatcher.CommitActivation();
+                                activationSentThisRun = true;
 
-                            // Suppress heartbeat for the activation week so the first heartbeat is NEXT week.
-                            dispatcher.CommitHeartbeat(currentWeek);
+                                // Suppress heartbeat for the activation week so the first heartbeat is NEXT week.
+                                dispatcher.CommitHeartbeat(currentWeek);
 
-                            Interlocked.Exchange(ref hasPendingWork, 1);
+                                Interlocked.Exchange(ref hasPendingWork, 1);
+                            }
+                            else {
+                                // A failed/null queue is not an accepted event and must not
+                                // commit either suppression marker.
+                                Interlocked.Exchange(ref activationRequested, 1);
+                                requestsNeedRetry = true;
+                                queue = null;
+                            }
                         }
                     }
                 }
@@ -273,9 +330,16 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     if (evt != null) {
                         var json = TelemetrySerializer.Serialize(evt, runtimeContext.ToolName);
                         if (json != null) {
-                            telemetryQueue.Enqueue(json);
-                            dispatcher.CommitHeartbeat(evt.Week);
-                            Interlocked.Exchange(ref hasPendingWork, 1);
+                            if (telemetryQueue.Enqueue(json)) {
+                                dispatcher.CommitHeartbeat(evt.Week);
+                                Interlocked.Exchange(ref hasPendingWork, 1);
+                            }
+                            else {
+                                // Do not suppress a heartbeat that never reached durable storage.
+                                Interlocked.Exchange(ref heartbeatRequested, 1);
+                                requestsNeedRetry = true;
+                                queue = null;
+                            }
                         }
                     }
                 }
@@ -288,11 +352,30 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             if (Volatile.Read(ref hasPendingWork) == 1) {
                 Signal();
             }
+
+            return requestsNeedRetry;
         }
 
-        private ITelemetryQueue GetQueueOnWorkerThread() {
-            queue ??= DurableTelemetryQueue.CreateSafe(runtimeContext);
+        private ITelemetryQueue? GetQueueOnWorkerThread() {
+            if (queue is not null)
+                return queue;
+
+            queue = DurableTelemetryQueue.CreateSafe(runtimeContext);
             return queue;
+        }
+
+        private static async Task ApplyQueueRecoveryDelay(int attempt, CancellationToken token) {
+            try {
+                var multiplier = 1 << Math.Min(attempt - 1, 3);
+                var delay = TimeSpan.FromMilliseconds(
+                    Math.Min(
+                        MaxQueueRecoveryDelay.TotalMilliseconds,
+                        InitialQueueRecoveryDelay.TotalMilliseconds * multiplier));
+                await Task.Delay(delay, token).ConfigureAwait(false);
+            }
+            catch {
+                // swallow
+            }
         }
 
         private async Task ApplyBackoff(CancellationToken token) {
