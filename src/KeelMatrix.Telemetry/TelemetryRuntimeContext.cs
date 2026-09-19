@@ -5,13 +5,13 @@ namespace KeelMatrix.Telemetry {
     /// Holds runtime-scoped telemetry identity and paths for a single client instance.
     /// </summary>
     internal sealed class TelemetryRuntimeContext {
-        private readonly string toolNameUpper;
+        private readonly string canonicalToolName;
         private string? rootDirectory;
 
         internal TelemetryRuntimeContext(string toolName, Type toolType) {
-            toolNameUpper = toolName;
+            canonicalToolName = toolName.ToLowerInvariant();
             ToolVersion = toolType.Assembly.GetName().Version?.ToString() ?? TelemetryConfig.UnknownSymbol;
-            ToolName = toolNameUpper.ToLowerInvariant();
+            ToolName = canonicalToolName;
             Url = TelemetryConfig.Url;
         }
 
@@ -28,7 +28,7 @@ namespace KeelMatrix.Telemetry {
             if (Volatile.Read(ref rootDirectory) is not null)
                 return;
 
-            var computed = TelemetryConfig.ResolveRootDirectory(toolNameUpper);
+            var computed = TelemetryConfig.ResolveRootDirectory(canonicalToolName);
 
             // If multiple worker wakes race (or multiple workers exist unexpectedly), keep the first resolved value.
             _ = Interlocked.CompareExchange(ref rootDirectory, computed, null);

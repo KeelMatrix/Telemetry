@@ -532,8 +532,22 @@ public sealed class TelemetryConfigTests : IDisposable {
 
         Path.IsPathRooted(root).Should().BeTrue();
 
-        var expectedSuffix = Path.Combine("KeelMatrix", toolNameUpper);
+        var expectedSuffix = Path.Combine("KeelMatrix", toolNameUpper.ToLowerInvariant());
         root.Should().Contain(expectedSuffix);
+    }
+
+    [Fact]
+    public void RuntimeContext_CaseVariantsShareCanonicalIdentityAndRoot() {
+        var toolName = "CaseVariant_" + Guid.NewGuid().ToString("N")[..12];
+        var uppercaseContext = new TelemetryRuntimeContext(toolName.ToUpperInvariant(), typeof(TelemetryConfigTests));
+        var lowercaseContext = new TelemetryRuntimeContext(toolName.ToLowerInvariant(), typeof(TelemetryConfigTests));
+
+        uppercaseContext.ToolName.Should().Be(lowercaseContext.ToolName);
+
+        uppercaseContext.EnsureRootDirectoryResolvedOnWorkerThread();
+        lowercaseContext.EnsureRootDirectoryResolvedOnWorkerThread();
+
+        uppercaseContext.GetRootDirectory().Should().Be(lowercaseContext.GetRootDirectory());
     }
 
     [Theory]
