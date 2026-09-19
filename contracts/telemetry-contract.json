@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "toolNameCases": [
+    {
+      "value": "a",
+      "accepted": true
+    },
+    {
+      "value": "a.b_c-d",
+      "accepted": true
+    },
+    {
+      "value": "z9.tool_name-v1",
+      "accepted": true
+    },
+    {
+      "value": "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "accepted": true
+    },
+    {
+      "value": "../tool",
+      "accepted": false
+    },
+    {
+      "value": "a/b",
+      "accepted": false
+    },
+    {
+      "value": "A-tool",
+      "accepted": false
+    },
+    {
+      "value": ".tool",
+      "accepted": false
+    },
+    {
+      "value": "-tool",
+      "accepted": false
+    },
+    {
+      "value": "_tool",
+      "accepted": false
+    },
+    {
+      "value": "ttttttttttttttttttttttttttttttttt",
+      "accepted": false
+    },
+    {
+      "value": "My Tool",
+      "accepted": false
+    },
+    {
+      "value": "My/Tool",
+      "accepted": false
+    },
+    {
+      "value": " Tool ",
+      "accepted": false
+    },
+    {
+      "value": "\u00E9tool",
+      "accepted": false
+    }
+  ],
+  "hashCases": [
+    {
+      "value": "0000000000000000000000000000000000000000000000000000000000000000",
+      "accepted": true
+    },
+    {
+      "value": "abc",
+      "accepted": false
+    },
+    {
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "accepted": false
+    },
+    {
+      "value": "gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+      "accepted": false
+    },
+    {
+      "value": "000000000000000000000000000000000000000000000000000000000000000",
+      "accepted": false
+    },
+    {
+      "value": "00000000000000000000000000000000000000000000000000000000000000000",
+      "accepted": false
+    }
+  ]
+}

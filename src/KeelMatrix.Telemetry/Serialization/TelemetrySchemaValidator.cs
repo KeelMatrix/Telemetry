@@ -32,10 +32,10 @@ namespace KeelMatrix.Telemetry.Serialization {
             if (telemetryEvent.TelemetryVersion.Length > TelemetryConfig.ToolVersionMaxLength)
                 return false;
 
-            if (!HasValidHash(telemetryEvent.ProjectHash, TelemetryConfig.ProjectHashMaxLength))
+            if (!IsValidHash(telemetryEvent.ProjectHash, TelemetryConfig.ProjectHashMaxLength))
                 return false;
 
-            if (!HasValidHash(telemetryEvent.InstallationHash, TelemetryConfig.InstallationHashMaxLength))
+            if (!IsValidHash(telemetryEvent.InstallationHash, TelemetryConfig.InstallationHashMaxLength))
                 return false;
 
             return telemetryEvent switch {
@@ -45,7 +45,7 @@ namespace KeelMatrix.Telemetry.Serialization {
             };
         }
 
-        private static bool HasValidHash(string value, int maxLength) {
+        internal static bool IsValidHash(string value, int maxLength) {
             if (value.Length != maxLength)
                 return false;
 

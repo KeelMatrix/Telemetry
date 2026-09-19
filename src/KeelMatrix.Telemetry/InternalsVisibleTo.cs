@@ -7,3 +7,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("KeelMatrix.Telemetry.CiEnvironmentTests")]
 [assembly: InternalsVisibleTo("KeelMatrix.Telemetry.IntegrationTests")]
 [assembly: InternalsVisibleTo("KeelMatrix.Telemetry.UnitTests")]
+[assembly: InternalsVisibleTo("KeelMatrix.Telemetry.ContractGenerator")]

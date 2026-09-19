@@ -128,15 +128,15 @@ public sealed class TelemetrySchemaValidatorTests {
     }
 
     [Theory]
-    [MemberData(nameof(GetInvalidHashCases))]
-    public void IsValid_RejectsHashesOutsideWorkerContract(string invalidHash) {
+    [MemberData(nameof(GetHashContractCases))]
+    public void IsValid_MatchesCanonicalHashContract(string projectHash, bool expectedValid) {
         var runtimeContext = CreateRuntimeContext("hash_contract");
         var evt = CreateActivation(
             runtimeContext,
-            projectHash: invalidHash,
+            projectHash: projectHash,
             installationHash: ValidInstallationHash);
 
-        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().BeFalse();
+        TelemetrySchemaValidator.IsValid(evt, runtimeContext.ToolName).Should().Be(expectedValid);
     }
 
     [Fact]
@@ -298,31 +298,20 @@ public sealed class TelemetrySchemaValidatorTests {
     }
 
     public static TheoryData<string, bool> GetWorkerToolContractCases() {
-        var data = new TheoryData<string, bool> {
-            { "a", true },
-            { "a.b_c-d", true },
-            { "z9.tool_name-v1", true },
-            { "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true },
-            { "../tool", false },
-            { "a/b", false },
-            { "A-tool", false },
-            { ".tool", false },
-            { "-tool", false },
-            { "_tool", false },
-            { "t" + new string('t', 32), false },
-            { "My Tool", false },
-            { "My/Tool", false },
-            { " Tool ", false },
-            { "étool", false }
-        };
+        var data = new TheoryData<string, bool>();
+
+        foreach (var testCase in TelemetryContractArtifact.GetToolNameCases())
+            data.Add(testCase.Value, testCase.Accepted);
+
         return data;
     }
 
-    public static TheoryData<string> GetInvalidHashCases() {
-        return new TheoryData<string> {
-            "abc",
-            new string('A', 64),
-            new string('g', 64)
-        };
+    public static TheoryData<string, bool> GetHashContractCases() {
+        var data = new TheoryData<string, bool>();
+        foreach (var testCase in TelemetryContractArtifact.GetHashCases())
+            data.Add(testCase.Value, testCase.Accepted);
+
+        return data;
     }
+
 }
