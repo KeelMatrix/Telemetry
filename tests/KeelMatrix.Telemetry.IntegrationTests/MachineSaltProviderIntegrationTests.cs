@@ -1,7 +1,9 @@
 // Copyright (c) KeelMatrix
 
+using System.Diagnostics;
 using System.Text;
 using FluentAssertions;
+using KeelMatrix.Telemetry.ProjectIdentity;
 
 namespace KeelMatrix.Telemetry.IntegrationTests;
 
@@ -15,6 +17,9 @@ public sealed class MachineSaltProviderIntegrationTests {
     private const string EnvKeelMatrixNoTelemetry = "KEELMATRIX_NO_TELEMETRY";
     private const string EnvDotNetCliTelemetryOptOut = "DOTNET_CLI_TELEMETRY_OPTOUT";
     private const string EnvDoNotTrack = "DO_NOT_TRACK";
+    private const string SaltChildRoleVariable = "KEELMATRIX_SALT_CHILD";
+    private const string SaltChildToolVariable = "KEELMATRIX_SALT_TOOL";
+    private const string SaltChildOutputVariable = "KEELMATRIX_SALT_OUTPUT";
 
     [Fact]
     public void GetOrCreateMachineSaltBytes_CreatesFileAndReturns32Bytes() {
@@ -73,6 +78,61 @@ public sealed class MachineSaltProviderIntegrationTests {
     }
 
     [Fact]
+    public async Task IndependentlyCreatedProvidersAcrossProcesses_ConvergeOnOnePersistedSalt() {
+        using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
+        ClearOptOutVars();
+
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
+        var outputPaths = Enumerable.Range(0, 8)
+            .Select(index => Path.Combine(runtime.RootDir, $"salt-child-{index}.txt"))
+            .ToArray();
+        var children = outputPaths.Select(path => StartSaltChildProcess(runtime.ToolNameUpper, path)).ToArray();
+
+        try {
+            await Task.WhenAll(children.Select(WaitForSaltChildAsync));
+
+            var results = outputPaths
+                .Select(path => Convert.FromHexString(File.ReadAllText(path, Encoding.UTF8).Trim()))
+                .ToArray();
+
+            results.Should().NotBeEmpty();
+            foreach (var result in results)
+                result.Should().Equal(results[0]);
+
+            Convert.FromHexString(File.ReadAllText(runtime.SaltPath, Encoding.UTF8).Trim()).Should().Equal(results[0]);
+        }
+        finally {
+            foreach (var child in children) {
+                try {
+                    if (!child.HasExited)
+                        child.Kill(entireProcessTree: true);
+                }
+                catch {
+                    // The child may have exited between HasExited and Kill.
+                }
+
+                child.Dispose();
+            }
+        }
+    }
+
+    [Fact]
+    public void SaltChild_CreatesMachineSalt() {
+        if (!string.Equals(Environment.GetEnvironmentVariable(SaltChildRoleVariable), "1", StringComparison.Ordinal))
+            return;
+
+        var toolName = Environment.GetEnvironmentVariable(SaltChildToolVariable)
+            ?? throw new InvalidOperationException("Salt child tool name is missing.");
+        var outputPath = Environment.GetEnvironmentVariable(SaltChildOutputVariable)
+            ?? throw new InvalidOperationException("Salt child output path is missing.");
+        var runtimeContext = new TelemetryRuntimeContext(toolName, typeof(MachineSaltProviderIntegrationTests));
+        runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
+        var bytes = new MachineSaltProvider(runtimeContext).GetOrCreateMachineSaltBytes();
+
+        File.WriteAllText(outputPath, Convert.ToHexString(bytes).ToLowerInvariant(), Encoding.UTF8);
+    }
+
+    [Fact]
     public void CorruptSaltFile_IsRegeneratedAndRewritten() {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
@@ -118,6 +178,53 @@ public sealed class MachineSaltProviderIntegrationTests {
         Environment.SetEnvironmentVariable(EnvKeelMatrixNoTelemetry, null);
         Environment.SetEnvironmentVariable(EnvDotNetCliTelemetryOptOut, null);
         Environment.SetEnvironmentVariable(EnvDoNotTrack, null);
+    }
+
+    private static Process StartSaltChildProcess(string toolName, string outputPath) {
+        var startInfo = new ProcessStartInfo {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("vstest");
+        startInfo.ArgumentList.Add(typeof(MachineSaltProviderIntegrationTests).Assembly.Location);
+        startInfo.ArgumentList.Add(
+            $"--TestCaseFilter:FullyQualifiedName~{typeof(MachineSaltProviderIntegrationTests).FullName}.{nameof(SaltChild_CreatesMachineSalt)}");
+        startInfo.Environment[SaltChildRoleVariable] = "1";
+        startInfo.Environment[SaltChildToolVariable] = toolName;
+        startInfo.Environment[SaltChildOutputVariable] = outputPath;
+        startInfo.Environment.Remove(EnvKeelMatrixNoTelemetry);
+        startInfo.Environment.Remove(EnvDotNetCliTelemetryOptOut);
+        startInfo.Environment.Remove(EnvDoNotTrack);
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start salt child process.");
+    }
+
+    private static async Task WaitForSaltChildAsync(Process process) {
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+
+        try {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch {
+            try {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch {
+                // The child may have exited between HasExited and Kill.
+            }
+
+            throw;
+        }
+
+        var output = await standardOutput;
+        var error = await standardError;
+        process.ExitCode.Should().Be(0, "salt child output: stdout={0}; stderr={1}", output, error);
     }
 
     private sealed class EnvironmentVariableSnapshot : IDisposable {

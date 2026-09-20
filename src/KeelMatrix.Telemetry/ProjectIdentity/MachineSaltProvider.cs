@@ -5,6 +5,8 @@ using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     internal sealed class MachineSaltProvider {
+        private const int SaltPublicationLockAttempts = 500;
+        private static readonly TimeSpan SaltPublicationLockRetryDelay = TimeSpan.FromMilliseconds(10);
         private readonly TelemetryRuntimeContext runtimeContext;
 
         internal MachineSaltProvider(TelemetryRuntimeContext runtimeContext) {
@@ -93,49 +95,30 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
         }
 
         private static bool TryPersistSaltAtomically(string path, byte[] saltBytes) {
-            string? tmp = null;
+            if (!TryAcquireSaltPublicationLock(path, out var publicationLock))
+                return false;
 
             try {
-                var saltHex = ProjectIdentityProvider.ToLowerHex(saltBytes);
-                tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-
-                try {
-                    using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-                        var bytes = Encoding.UTF8.GetBytes(saltHex);
-                        stream.Write(bytes, 0, bytes.Length);
-                        stream.Flush(true);
-                    }
-
-#if NET8_0_OR_GREATER
-                    File.Move(tmp, path, overwrite: false);
+                // A valid value published by another process while this caller waited is the winner.
+                if (TryReadPersistedSalt(path, out _))
                     return true;
-#else
-                    // File.Move does not replace an existing destination on netstandard2.0.
-                    File.Move(tmp, path);
-                    return true;
-#endif
-                }
-                catch {
+
+                // Never replace an existing corrupt value here. Recovery owns deletion under the same lock.
+                if (File.Exists(path))
                     return false;
-                }
-            }
-            catch {
-                return false;
+
+                return TryPublishSaltWhileLocked(path, saltBytes);
             }
             finally {
-                if (!string.IsNullOrEmpty(tmp)) {
-                    try { File.Delete(tmp); } catch { /* swallow */ }
-                }
+                try { publicationLock!.Dispose(); } catch { /* swallow */ }
             }
         }
 
         private static bool TryRecoverCorruptSalt(string path) {
-            var recoveryLockPath = path + ".recovery.lock";
-            FileStream? recoveryLock = null;
+            if (!TryAcquireSaltPublicationLock(path, out var publicationLock))
+                return false;
 
             try {
-                recoveryLock = new FileStream(recoveryLockPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-
                 // Re-check under the recovery lease. Another process may have published
                 // a valid salt between the caller's read and lease acquisition.
                 if (TryReadPersistedSalt(path, out _))
@@ -150,19 +133,73 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                 }
 
                 var replacement = GenerateRandomSaltBytes();
-                return TryPersistSaltAtomically(path, replacement) || TryReadPersistedSalt(path, out _);
+                return TryPublishSaltWhileLocked(path, replacement) || TryReadPersistedSalt(path, out _);
             }
             catch {
-                // An existing recovery lease means another process owns corrupt-file recovery,
-                // or a killed writer left a stale lease. Fail closed in either case.
                 return false;
             }
             finally {
-                if (recoveryLock is not null) {
-                    try { recoveryLock.Dispose(); } catch { /* swallow */ }
-                    try { File.Delete(recoveryLockPath); } catch { /* swallow */ }
+                try { publicationLock!.Dispose(); } catch { /* swallow */ }
+            }
+        }
+
+        private static bool TryPublishSaltWhileLocked(string path, byte[] saltBytes) {
+            string? tmp = null;
+
+            try {
+                var saltHex = ProjectIdentityProvider.ToLowerHex(saltBytes);
+                tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+                using (var stream = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+                    var bytes = Encoding.UTF8.GetBytes(saltHex);
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(true);
+                }
+
+#if NET8_0_OR_GREATER
+                File.Move(tmp, path, overwrite: false);
+#else
+                // File.Move does not replace an existing destination on netstandard2.0.
+                File.Move(tmp, path);
+#endif
+                return true;
+            }
+            catch {
+                return false;
+            }
+            finally {
+                if (!string.IsNullOrEmpty(tmp)) {
+                    try { File.Delete(tmp); } catch { /* swallow */ }
                 }
             }
+        }
+
+        private static bool TryAcquireSaltPublicationLock(string path, out FileStream? publicationLock) {
+            var lockPath = path + ".lock";
+
+            for (var attempt = 0; attempt < SaltPublicationLockAttempts; attempt++) {
+                try {
+                    publicationLock = new FileStream(
+                        lockPath,
+                        FileMode.OpenOrCreate,
+                        FileAccess.ReadWrite,
+                        FileShare.None,
+                        bufferSize: 1,
+                        options: FileOptions.None);
+                    return true;
+                }
+                catch (IOException) {
+                    if (attempt + 1 < SaltPublicationLockAttempts)
+                        Thread.Sleep(SaltPublicationLockRetryDelay);
+                }
+                catch {
+                    publicationLock = null;
+                    return false;
+                }
+            }
+
+            publicationLock = null;
+            return false;
         }
 
         private static byte[] GenerateRandomSaltBytes() {
