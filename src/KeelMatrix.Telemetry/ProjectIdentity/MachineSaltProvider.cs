@@ -6,8 +6,10 @@ using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     internal sealed class MachineSaltProvider {
-        // One five-second budget covers the complete salt-resolution path, including both
-        // publication and corrupt-salt recovery lock attempts. It is not five seconds per lock.
+        // The five-second budget bounds only publication and corrupt-salt recovery lock
+        // acquisition/retry waits, shared by both lock attempts; it is not five seconds per lock.
+        // Synchronous filesystem operations (directory creation, read, flush, move, delete) are
+        // not deadline-bounded, so a pathologically slow filesystem can exceed this budget.
         private static readonly TimeSpan SaltResolutionBudget = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan SaltPublicationLockRetryDelay = TimeSpan.FromMilliseconds(10);
         private readonly TelemetryRuntimeContext runtimeContext;
