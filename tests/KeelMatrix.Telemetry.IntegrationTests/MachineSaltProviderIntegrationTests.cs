@@ -1,6 +1,8 @@
 // Copyright (c) KeelMatrix
 
 using System.Diagnostics;
+using System.Reflection;
+using System.Runtime.Loader;
 using System.Text;
 using FluentAssertions;
 using KeelMatrix.Telemetry.ProjectIdentity;
@@ -154,6 +156,77 @@ public sealed class MachineSaltProviderIntegrationTests {
     }
 
     [Fact]
+    public void HeldPublicationLock_DisablesTelemetryAndReturnsWithoutThrowing() {
+        using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
+        ClearOptOutVars();
+
+        using var runtime = TestRuntimeScope.Create(typeof(MachineSaltProviderIntegrationTests));
+        Directory.CreateDirectory(runtime.RootDir);
+        using var heldLock = new FileStream(
+            runtime.SaltPath + ".lock",
+            FileMode.OpenOrCreate,
+            FileAccess.ReadWrite,
+            FileShare.None,
+            bufferSize: 1,
+            options: FileOptions.None);
+
+        var stopwatch = Stopwatch.StartNew();
+        var action = () => runtime.CreateMachineSaltProvider().GetOrCreateMachineSaltBytes();
+
+        action.Should().NotThrow();
+        stopwatch.Stop();
+
+        stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(7));
+        TelemetryConfig.IsTelemetryDisabled().Should().BeTrue();
+        File.Exists(runtime.SaltPath).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Netstandard2MachineSaltProvider_ExecutesPublicationBranch() {
+        using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
+        ClearOptOutVars();
+
+        var assemblyPath = FindNetstandardAssemblyPath();
+        var loadContext = new AssemblyLoadContext(
+            "KeelMatrix.Telemetry.netstandard-salt-test-" + Guid.NewGuid().ToString("N"),
+            isCollectible: true);
+        var rootDirectory = string.Empty;
+
+        try {
+            var assembly = loadContext.LoadFromAssemblyPath(assemblyPath);
+            var runtimeContextType = assembly.GetType("KeelMatrix.Telemetry.TelemetryRuntimeContext")!;
+            var providerType = assembly.GetType("KeelMatrix.Telemetry.ProjectIdentity.MachineSaltProvider")!;
+            var toolName = "NETSTANDARD_SALT_" + Guid.NewGuid().ToString("N")[..16];
+            var runtimeContext = runtimeContextType
+                .GetConstructor(
+                    BindingFlags.Instance | BindingFlags.NonPublic,
+                    binder: null,
+                    [typeof(string), typeof(Type)],
+                    modifiers: null)!
+                .Invoke([toolName, typeof(MachineSaltProviderIntegrationTests)]);
+
+            Invoke(runtimeContext, "EnsureRootDirectoryResolvedOnWorkerThread");
+            rootDirectory = (string)Invoke(runtimeContext, "GetRootDirectory")!;
+            var provider = providerType
+                .GetConstructor(
+                    BindingFlags.Instance | BindingFlags.NonPublic,
+                    binder: null,
+                    [runtimeContextType],
+                    modifiers: null)!
+                .Invoke([runtimeContext]);
+
+            var bytes = (byte[])Invoke(provider, "GetOrCreateMachineSaltBytes")!;
+
+            bytes.Should().HaveCount(TelemetryConfig.ExpectedSaltBytes);
+            File.Exists(Path.Combine(rootDirectory, "telemetry.salt")).Should().BeTrue();
+        }
+        finally {
+            loadContext.Unload();
+            TestCleanup.TryDeleteDirectory(rootDirectory);
+        }
+    }
+
+    [Fact]
     public void WhenTelemetryDisabled_DoesNotDoIO_ReturnsRandomSalt() {
         using var _ = new EnvironmentVariableSnapshot(EnvKeelMatrixNoTelemetry, EnvDotNetCliTelemetryOptOut, EnvDoNotTrack);
         ClearOptOutVars();
@@ -225,6 +298,51 @@ public sealed class MachineSaltProviderIntegrationTests {
         var output = await standardOutput;
         var error = await standardError;
         process.ExitCode.Should().Be(0, "salt child output: stdout={0}; stderr={1}", output, error);
+    }
+
+    private static string FindNetstandardAssemblyPath() {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null) {
+            if (File.Exists(Path.Combine(current.FullName, "KeelMatrix.Telemetry.slnx"))) {
+                var configuration = Directory.GetParent(AppContext.BaseDirectory)!.Name;
+                var candidate = Path.Combine(
+                    current.FullName,
+                    "src",
+                    "KeelMatrix.Telemetry",
+                    "bin",
+                    configuration,
+                    "netstandard2.0",
+                    "KeelMatrix.Telemetry.dll");
+                if (File.Exists(candidate))
+                    return candidate;
+
+                foreach (var fallbackConfiguration in new[] { "Release", "Debug" }) {
+                    candidate = Path.Combine(
+                        current.FullName,
+                        "src",
+                        "KeelMatrix.Telemetry",
+                        "bin",
+                        fallbackConfiguration,
+                        "netstandard2.0",
+                        "KeelMatrix.Telemetry.dll");
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
+            }
+
+            current = current.Parent;
+        }
+
+        throw new FileNotFoundException("The built netstandard2.0 Telemetry assembly was not found.");
+    }
+
+    private static object? Invoke(object target, string methodName, params object?[] args) {
+        var method = target.GetType()
+            .GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .Single(candidate =>
+                candidate.Name == methodName &&
+                candidate.GetParameters().Length == args.Length);
+        return method.Invoke(target, args);
     }
 
     private sealed class EnvironmentVariableSnapshot : IDisposable {

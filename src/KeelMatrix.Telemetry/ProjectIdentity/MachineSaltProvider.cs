@@ -1,11 +1,14 @@
 // Copyright (c) KeelMatrix
 
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace KeelMatrix.Telemetry.ProjectIdentity {
     internal sealed class MachineSaltProvider {
-        private const int SaltPublicationLockAttempts = 500;
+        // One five-second budget covers the complete salt-resolution path, including both
+        // publication and corrupt-salt recovery lock attempts. It is not five seconds per lock.
+        private static readonly TimeSpan SaltResolutionBudget = TimeSpan.FromSeconds(5);
         private static readonly TimeSpan SaltPublicationLockRetryDelay = TimeSpan.FromMilliseconds(10);
         private readonly TelemetryRuntimeContext runtimeContext;
 
@@ -27,6 +30,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             if (TelemetryConfig.IsTelemetryDisabled())
                 return GenerateRandomSaltBytes();
 
+            var resolutionDeadline = CreateResolutionDeadline();
             TryEnsureDirectory(path);
 
             // 1) Try read existing, with size cap + strict validation.
@@ -36,7 +40,7 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             // 2) Regenerate once and require persistence. A process that loses the publication race
             // must use the valid winner, never replace it with its own value.
             var newSalt = GenerateRandomSaltBytes();
-            if (TryPersistSaltAtomically(path, newSalt)) {
+            if (TryPersistSaltAtomically(path, newSalt, resolutionDeadline)) {
                 if (TryReadPersistedSalt(path, out var reread))
                     return reread;
 
@@ -45,13 +49,15 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
             // A competing process may have published a winner after our first read or failed
             // publication attempt. Always prefer that valid value before attempting recovery.
-            if (TryReadPersistedSalt(path, out var winner))
+            if (HasResolutionTimeRemaining(resolutionDeadline) && TryReadPersistedSalt(path, out var winner))
                 return winner;
 
             // Corrupt or oversized content may be recovered only while holding an atomic,
             // process-independent recovery lease. A stale lease fails closed rather than
             // risking deletion of a valid winner.
-            if (TryRecoverCorruptSalt(path) && TryReadPersistedSalt(path, out var recovered))
+            if (HasResolutionTimeRemaining(resolutionDeadline) &&
+                TryRecoverCorruptSalt(path, resolutionDeadline) &&
+                TryReadPersistedSalt(path, out var recovered))
                 return recovered;
 
             // 3) Cannot persist => disable telemetry for the current process.
@@ -94,8 +100,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
         }
 
-        private static bool TryPersistSaltAtomically(string path, byte[] saltBytes) {
-            if (!TryAcquireSaltPublicationLock(path, out var publicationLock))
+        private static bool TryPersistSaltAtomically(string path, byte[] saltBytes, long resolutionDeadline) {
+            if (!TryAcquireSaltPublicationLock(path, resolutionDeadline, out var publicationLock))
                 return false;
 
             try {
@@ -114,8 +120,8 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
         }
 
-        private static bool TryRecoverCorruptSalt(string path) {
-            if (!TryAcquireSaltPublicationLock(path, out var publicationLock))
+        private static bool TryRecoverCorruptSalt(string path, long resolutionDeadline) {
+            if (!TryAcquireSaltPublicationLock(path, resolutionDeadline, out var publicationLock))
                 return false;
 
             try {
@@ -174,10 +180,10 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
             }
         }
 
-        private static bool TryAcquireSaltPublicationLock(string path, out FileStream? publicationLock) {
+        private static bool TryAcquireSaltPublicationLock(string path, long resolutionDeadline, out FileStream? publicationLock) {
             var lockPath = path + ".lock";
 
-            for (var attempt = 0; attempt < SaltPublicationLockAttempts; attempt++) {
+            while (HasResolutionTimeRemaining(resolutionDeadline)) {
                 try {
                     publicationLock = new FileStream(
                         lockPath,
@@ -189,8 +195,13 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
                     return true;
                 }
                 catch (IOException) {
-                    if (attempt + 1 < SaltPublicationLockAttempts)
-                        Thread.Sleep(SaltPublicationLockRetryDelay);
+                    var remainingMilliseconds = GetRemainingMilliseconds(resolutionDeadline);
+                    if (remainingMilliseconds <= 0)
+                        break;
+
+                    Thread.Sleep(Math.Min(
+                        (int)SaltPublicationLockRetryDelay.TotalMilliseconds,
+                        remainingMilliseconds));
                 }
                 catch {
                     publicationLock = null;
@@ -200,6 +211,24 @@ namespace KeelMatrix.Telemetry.ProjectIdentity {
 
             publicationLock = null;
             return false;
+        }
+
+        private static long CreateResolutionDeadline() {
+            var budgetTicks = (long)(SaltResolutionBudget.TotalSeconds * Stopwatch.Frequency);
+            return Stopwatch.GetTimestamp() + budgetTicks;
+        }
+
+        private static bool HasResolutionTimeRemaining(long resolutionDeadline) {
+            return Stopwatch.GetTimestamp() < resolutionDeadline;
+        }
+
+        private static int GetRemainingMilliseconds(long resolutionDeadline) {
+            var remainingTicks = resolutionDeadline - Stopwatch.GetTimestamp();
+            if (remainingTicks <= 0)
+                return 0;
+
+            var remainingMilliseconds = remainingTicks * 1000 / Stopwatch.Frequency;
+            return (int)Math.Min(remainingMilliseconds, int.MaxValue);
         }
 
         private static byte[] GenerateRandomSaltBytes() {
