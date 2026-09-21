@@ -88,6 +88,7 @@ jobs:
           -p:Version=${{ needs.resolve-version.outputs.version }}
           --results-directory ./artifacts/test-results/unit
           --logger "trx;LogFileName=unit.trx"
+          --logger "console;verbosity=detailed"
           --blame-hang
           --blame-hang-timeout 5m
 
@@ -100,6 +101,7 @@ jobs:
           -p:Version=${{ needs.resolve-version.outputs.version }}
           --results-directory ./artifacts/test-results/integration
           --logger "trx;LogFileName=integration.trx"
+          --logger "console;verbosity=detailed"
           --blame-hang
           --blame-hang-timeout 5m
 
@@ -112,6 +114,7 @@ jobs:
           -p:Version=${{ needs.resolve-version.outputs.version }}
           --results-directory ./artifacts/test-results/ci-environment
           --logger "trx;LogFileName=ci-environment.trx"
+          --logger "console;verbosity=detailed"
           --blame-hang
           --blame-hang-timeout 5m
 
