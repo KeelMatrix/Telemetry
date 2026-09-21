@@ -131,17 +131,121 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
         var queue = runtime.CreateQueue();
         queue.Enqueue("{\"event\":\"crash-recovery\"}");
+        var pendingFileName = Path.GetFileName(Directory.EnumerateFiles(runtime.PendingDir, "*.json").Single());
         var claimed = queue.TryClaim(1).Single();
 
         var staleUtc = DateTime.UtcNow - TelemetryConfig.ProcessingStaleThreshold - TimeSpan.FromMinutes(1);
         File.SetLastWriteTimeUtc(claimed.Path, staleUtc);
 
         var recoveredQueue = runtime.CreateQueue();
-        var pendingPath = Path.Combine(runtime.PendingDir, Path.GetFileName(claimed.Path));
+        var pendingPath = Path.Combine(runtime.PendingDir, pendingFileName);
         File.Exists(pendingPath).Should().BeTrue();
         var recovered = recoveredQueue.TryClaim(1).Single();
 
         recovered.Envelope.PayloadJson.Should().Be("{\"event\":\"crash-recovery\"}");
+    }
+
+    [Fact]
+    public void ClaimAndRecoveryCycles_KeepNamesBounded_AndReachDeadLetter() {
+        using var runtime = TestRuntimeScope.Create(typeof(DurableTelemetryQueueIntegrationTests));
+        var longRoot = Path.Combine(
+            Path.GetTempPath(),
+            "KeelMatrix.Telemetry.QueueBounds",
+            new string('r', 80),
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(longRoot);
+
+        var rootField = typeof(TelemetryRuntimeContext).GetField(
+            "rootDirectory",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        rootField.Should().NotBeNull();
+        rootField!.SetValue(runtime.RuntimeContext, longRoot);
+
+        var queueRoot = Path.Combine(longRoot, "telemetry.queue");
+        var pendingDir = Path.Combine(queueRoot, "pending");
+        var processingDir = Path.Combine(queueRoot, "processing");
+        var deadDir = Path.Combine(queueRoot, "dead");
+        var observedNames = new List<string>();
+
+        void ObservePath(string path) {
+            var name = Path.GetFileName(path);
+            name.Should().NotBeNullOrEmpty();
+            name.Length.Should().BeLessThanOrEqualTo(103, "the canonical envelope identity and one claim generation must remain bounded");
+            observedNames.Add(name);
+        }
+
+        void ObserveQueueFiles() {
+            if (!Directory.Exists(queueRoot))
+                return;
+
+            foreach (var path in Directory.EnumerateFiles(queueRoot, "*", SearchOption.AllDirectories))
+                ObservePath(path);
+        }
+
+        DurableTelemetryQueue.SetPendingWritePauseHookForTests((tmpPath, ownershipPath) => {
+            ObservePath(tmpPath);
+            ObservePath(ownershipPath);
+        });
+
+        try {
+            var queue = runtime.CreateQueue();
+            queue.Enqueue("{\"event\":\"bounded-cycles\"}").Should().BeTrue();
+
+            for (var attempt = 0; attempt < TelemetryConfig.MaxSendAttempts; attempt++) {
+                var claimed = queue.TryClaim(1).Single();
+                ObserveQueueFiles();
+
+                queue.Abandon(claimed);
+                ObserveQueueFiles();
+            }
+
+            Directory.EnumerateFiles(pendingDir, "*.json").Should().BeEmpty();
+            Directory.EnumerateFiles(processingDir, "*.json").Should().BeEmpty();
+            var deadLetter = Directory.EnumerateFiles(deadDir, "*.json").Should().ContainSingle().Which;
+            TelemetryEnvelope.Deserialize(File.ReadAllText(deadLetter)).Attempts.Should().Be(TelemetryConfig.MaxSendAttempts - 1);
+
+            queue.Enqueue("{\"event\":\"recovery-cycles\"}").Should().BeTrue();
+            for (var cycle = 0; cycle < TelemetryConfig.MaxSendAttempts + 8; cycle++) {
+                var staleOwnerQueue = queue;
+                var staleOwner = staleOwnerQueue.TryClaim(1).Single();
+                ObserveQueueFiles();
+
+                if (cycle % 2 == 0) {
+                    staleOwnerQueue.Release(staleOwner);
+                    ObserveQueueFiles();
+                    continue;
+                }
+
+                File.SetLastWriteTimeUtc(
+                    staleOwner.Path,
+                    DateTime.UtcNow - TelemetryConfig.ProcessingStaleThreshold - TimeSpan.FromMinutes(1));
+
+                queue = runtime.CreateQueue();
+                ObserveQueueFiles();
+                var newerOwner = queue.TryClaim(1).Single();
+                ObserveQueueFiles();
+
+                staleOwnerQueue.Complete(staleOwner);
+                staleOwnerQueue.Abandon(staleOwner);
+                ObserveQueueFiles();
+
+                queue.Release(newerOwner);
+                ObserveQueueFiles();
+            }
+
+            var finalClaim = queue.TryClaim(1).Single();
+            queue.Complete(finalClaim);
+            ObserveQueueFiles();
+
+            observedNames.Should().NotBeEmpty();
+            observedNames.Max(name => name.Length).Should().BeLessThanOrEqualTo(103);
+            Directory.EnumerateFiles(pendingDir, "*.json").Should().BeEmpty();
+            Directory.EnumerateFiles(processingDir, "*.json").Should().BeEmpty();
+        }
+        finally {
+            DurableTelemetryQueue.SetPendingWritePauseHookForTests(null);
+            TestCleanup.TryDeleteDirectory(longRoot);
+        }
     }
 
     [Fact]

@@ -140,7 +140,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     if (age < TelemetryConfig.ProcessingStaleThreshold)
                         continue;
 
-                    var target = Path.Combine(pendingDir, Path.GetFileName(file));
+                    var target = Path.Combine(pendingDir, GetCanonicalPendingFileName(file));
                     // Never overwrite a pending copy another process may already own.
                     if (File.Exists(target))
                         continue;
@@ -184,9 +184,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 EnforceLimit();
 
                 var envelope = new TelemetryEnvelope(payloadJson);
-                var finalPath = Path.Combine(
-                    pendingDir,
-                    $"{envelope.EnqueuedUtc.UtcDateTime.ToString(QueueFileTimestampFormat, CultureInfo.InvariantCulture)}_{envelope.Id}.json");
+                var finalPath = Path.Combine(pendingDir, CreatePendingFileName(envelope));
                 // Write fully and close a uniquely owned temp file BEFORE attempting the atomic move.
                 if (!TryWritePendingAtomically(finalPath, envelope.Serialize()))
                     return false;
@@ -346,7 +344,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                     Attempts = incrementAttempts ? env.Attempts + 1 : env.Attempts
                 };
 
-                var target = Path.Combine(pendingDir, Path.GetFileName(item.Path));
+                var target = Path.Combine(pendingDir, CreatePendingFileName(updated));
 
                 // Persist updated envelope into pending atomically-ish:
                 // write temp in pending dir, then move into place.
@@ -447,11 +445,31 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         }
 
         private static string CreateClaimedFileName(string pendingFileName) {
+            var canonicalFileName = GetCanonicalPendingFileName(pendingFileName);
             return string.Concat(
-                Path.GetFileNameWithoutExtension(pendingFileName),
+                Path.GetFileNameWithoutExtension(canonicalFileName),
                 ".claim.",
                 Guid.NewGuid().ToString("N"),
                 ".json");
+        }
+
+        private static string CreatePendingFileName(TelemetryEnvelope envelope) {
+            return string.Concat(
+                envelope.EnqueuedUtc.UtcDateTime.ToString(QueueFileTimestampFormat, CultureInfo.InvariantCulture),
+                "_",
+                envelope.Id,
+                ".json");
+        }
+
+        private static string GetCanonicalPendingFileName(string path) {
+            var fileName = Path.GetFileName(path);
+            var withoutExtension = Path.GetFileNameWithoutExtension(fileName);
+            var claimMarker = withoutExtension.IndexOf(".claim.", StringComparison.Ordinal);
+
+            if (claimMarker >= 0)
+                withoutExtension = withoutExtension.Substring(0, claimMarker);
+
+            return withoutExtension + ".json";
         }
 
         private static string GetClaimLockPath(string claimPath) {
