@@ -60,6 +60,7 @@ jobs:
           - ubuntu-latest
           - windows-latest
           - macos-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -78,8 +79,52 @@ jobs:
       - name: Build
         run: dotnet build KeelMatrix.Telemetry.slnx --configuration Release --no-restore -p:Version=${{ needs.resolve-version.outputs.version }}
 
-      - name: Test
-        run: dotnet test KeelMatrix.Telemetry.slnx --configuration Release --no-build -p:Version=${{ needs.resolve-version.outputs.version }}
+      - name: Test unit project
+        timeout-minutes: 7
+        run: >
+          dotnet test tests/KeelMatrix.Telemetry.UnitTests/KeelMatrix.Telemetry.UnitTests.csproj
+          --configuration Release
+          --no-build
+          -p:Version=${{ needs.resolve-version.outputs.version }}
+          --results-directory ./artifacts/test-results/unit
+          --logger "trx;LogFileName=unit.trx"
+          --blame-hang
+          --blame-hang-timeout 5m
+
+      - name: Test integration project
+        timeout-minutes: 7
+        run: >
+          dotnet test tests/KeelMatrix.Telemetry.IntegrationTests/KeelMatrix.Telemetry.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          -p:Version=${{ needs.resolve-version.outputs.version }}
+          --results-directory ./artifacts/test-results/integration
+          --logger "trx;LogFileName=integration.trx"
+          --blame-hang
+          --blame-hang-timeout 5m
+
+      - name: Test CI environment project
+        timeout-minutes: 7
+        run: >
+          dotnet test tests/KeelMatrix.Telemetry.CiEnvironmentTests/KeelMatrix.Telemetry.CiEnvironmentTests.csproj
+          --configuration Release
+          --no-build
+          -p:Version=${{ needs.resolve-version.outputs.version }}
+          --results-directory ./artifacts/test-results/ci-environment
+          --logger "trx;LogFileName=ci-environment.trx"
+          --blame-hang
+          --blame-hang-timeout 5m
+
+      - name: Upload test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-diagnostics-${{ matrix.os }}
+          path: |
+            ./artifacts/test-results
+            **/TestResults/**
+          if-no-files-found: ignore
+          overwrite: true
 
   validate-dependabot:
     if: github.actor == 'dependabot[bot]'
