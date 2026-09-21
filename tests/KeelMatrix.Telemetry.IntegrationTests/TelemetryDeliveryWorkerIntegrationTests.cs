@@ -18,6 +18,9 @@ public sealed class TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition 
 
 [Collection(TelemetryDeliveryWorkerIntegrationTestsCollectionDefinition.Name)]
 public sealed class TelemetryDeliveryWorkerIntegrationTests {
+    private const string ShutdownChildRoleVariable = "KEELMATRIX_SHUTDOWN_CHILD_ROLE";
+    private const string ShutdownChildSignalVariable = "KEELMATRIX_SHUTDOWN_CHILD_SIGNAL";
+
     [Fact]
     public async Task RequestActivation_SetsFlagAndDoesNotBlock() {
         using var harness = new WorkerHarness();
@@ -495,6 +498,90 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         await sender.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await disposeTask.WaitAsync(TimeSpan.FromSeconds(5));
         disposeTask.IsCompletedSuccessfully.Should().BeTrue();
+        sender.IsDisposed.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ProcessExit_DoesNotWaitForSynchronousTelemetrySend() {
+        var role = Environment.GetEnvironmentVariable(ShutdownChildRoleVariable);
+        if (string.Equals(role, "child", StringComparison.Ordinal)) {
+            RunShutdownChildProcess();
+            return;
+        }
+
+        var tempRoot = Path.Combine(
+            Path.GetTempPath(),
+            "KeelMatrix.Telemetry.ShutdownTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var enteredPath = Path.Combine(tempRoot, "entered");
+        using var process = StartShutdownTestProcess(nameof(ProcessExit_DoesNotWaitForSynchronousTelemetrySend), enteredPath);
+
+        try {
+            await WaitUntilAsync(() => File.Exists(enteredPath), TimeSpan.FromSeconds(15));
+            var stopwatch = Stopwatch.StartNew();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            stopwatch.Stop();
+
+            // The testhost reports a non-zero status when the child intentionally exits
+            // from inside a test; bounded process exit is the contract under test.
+            stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+        }
+        catch {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+
+            try { await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { /* preserve the original failure */ }
+            throw;
+        }
+        finally {
+            TestCleanup.TryDeleteDirectory(tempRoot);
+        }
+    }
+
+    private static void RunShutdownChildProcess() {
+        var enteredPath = Environment.GetEnvironmentVariable(ShutdownChildSignalVariable)
+            ?? throw new InvalidOperationException("Shutdown child signal path is missing.");
+        var runtimeContext = new TelemetryRuntimeContext(
+            "shutdown_child_" + Guid.NewGuid().ToString("N")[..12],
+            typeof(TelemetryDeliveryWorkerIntegrationTests));
+        runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
+        TestCleanup.TryDeleteDirectory(runtimeContext.GetRootDirectory());
+
+        var queue = DurableTelemetryQueue.CreateSafe(runtimeContext)
+            ?? throw new InvalidOperationException("Could not create the shutdown child queue.");
+        queue.Enqueue("{\"event\":\"shutdown\"}").Should().BeTrue();
+
+        var sender = new BlockingSynchronousTelemetrySender(enteredPath);
+        _ = new TelemetryDeliveryWorker(
+            runtimeContext,
+            new RuntimeInfo(),
+            new FixedProjectIdentityProvider(),
+            sender);
+
+        sender.Entered.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue();
+        TestCleanup.TryDeleteDirectory(runtimeContext.GetRootDirectory());
+        Environment.Exit(0);
+    }
+
+    private static Process StartShutdownTestProcess(string testName, string signalPath) {
+        var startInfo = new ProcessStartInfo {
+            FileName = "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("vstest");
+        startInfo.ArgumentList.Add(typeof(TelemetryDeliveryWorkerIntegrationTests).Assembly.Location);
+        startInfo.ArgumentList.Add(
+            $"--TestCaseFilter:FullyQualifiedName~{typeof(TelemetryDeliveryWorkerIntegrationTests).FullName}.{testName}");
+        startInfo.Environment[ShutdownChildRoleVariable] = "child";
+        startInfo.Environment[ShutdownChildSignalVariable] = signalPath;
+
+        return Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start shutdown test process.");
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout) {
@@ -708,6 +795,7 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     private sealed class PausingTelemetrySender : ITelemetrySender {
         private readonly TaskCompletionSource<bool> releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int requestCount;
+        private int disposed;
 
         public TaskCompletionSource<bool> FirstRequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<bool> CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -731,7 +819,38 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
 
         public void ReleaseFirst() => releaseFirst.TrySetResult(true);
 
-        public void Dispose() => releaseFirst.TrySetCanceled();
+        public bool IsDisposed => Volatile.Read(ref disposed) == 1;
+
+        public void Dispose() {
+            Interlocked.Exchange(ref disposed, 1);
+            releaseFirst.TrySetCanceled();
+        }
+    }
+
+    private sealed class BlockingSynchronousTelemetrySender : ITelemetrySender {
+        private readonly string enteredPath;
+        private readonly ManualResetEventSlim neverRelease = new(false);
+
+        public BlockingSynchronousTelemetrySender(string enteredPath) {
+            this.enteredPath = enteredPath;
+        }
+
+        public ManualResetEventSlim Entered { get; } = new(false);
+
+        public Task<bool> TrySendAsync(string json, CancellationToken token) {
+            File.WriteAllText(enteredPath, "entered");
+            Entered.Set();
+            neverRelease.Wait();
+            return Task.FromResult(true);
+        }
+
+        public void Dispose() { }
+    }
+
+    private sealed class FixedProjectIdentityProvider : IProjectIdentityProvider {
+        public ResolvedTelemetryIdentity EnsureResolvedOnWorkerThread() {
+            return new ResolvedTelemetryIdentity("project", "installation");
+        }
     }
 
     private sealed class RetryOnceTelemetrySender : ITelemetrySender {

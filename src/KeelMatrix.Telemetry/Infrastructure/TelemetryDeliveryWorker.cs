@@ -19,6 +19,8 @@ namespace KeelMatrix.Telemetry.Infrastructure {
         private readonly SemaphoreSlim signal = new(0, 1);
         private readonly CancellationTokenSource cts = new();
         private int disposed;
+        private int resourcesDisposed;
+        private int processExitCleanupScheduled;
         private int signalPending;
         private readonly object testCycleLock = new();
         private long completedTestCycle;
@@ -80,9 +82,9 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
             _workerTask = Task.Run(RunAsync);
 
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => Dispose();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => DisposeForProcessExit();
 #if NET8_0_OR_GREATER
-            AppDomain.CurrentDomain.DomainUnload += (_, _) => Dispose();
+            AppDomain.CurrentDomain.DomainUnload += (_, _) => DisposeForProcessExit();
 #endif
 
             // Wake immediately to process backlog (disk queue) even without requests.
@@ -495,12 +497,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
             if (Interlocked.Exchange(ref disposed, 1) != 0)
                 return;
 
-            try {
-                cts.Cancel();
-                signal.Release();
-            }
-            catch (SemaphoreFullException) { /* swallow */ }
-            catch { /* swallow */ }
+            RequestShutdown();
 
             try {
                 if (Task.CurrentId != _workerTask.Id)
@@ -510,14 +507,59 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                 // Telemetry shutdown must not affect the host process.
             }
 
+            DisposeResources();
+        }
+
+        private void DisposeForProcessExit() {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+                return;
+
+            RequestShutdown();
+
+            // ProcessExit must never depend on synchronous I/O or a cooperative worker.
+            // Resources remain owned until the worker actually stops; the host is free to
+            // terminate while that continuation is still waiting.
+            if (Interlocked.Exchange(ref processExitCleanupScheduled, 1) == 0) {
+                _ = _workerTask.ContinueWith(
+                    static (_, state) => ((TelemetryDeliveryWorker)state!).DisposeResources(),
+                    this,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
+
+        private void RequestShutdown() {
+            try {
+                cts.Cancel();
+            }
+            catch { /* swallow */ }
+
+            try {
+                signal.Release();
+            }
+            catch (SemaphoreFullException) { /* swallow */ }
+            catch { /* swallow */ }
+        }
+
+        private void DisposeResources() {
+            if (Interlocked.Exchange(ref resourcesDisposed, 1) != 0)
+                return;
+
             try {
                 cts.Dispose();
+            }
+            catch { /* swallow */ }
+
+            try {
                 signal.Dispose();
+            }
+            catch { /* swallow */ }
+
+            try {
                 httpSender.Dispose();
             }
-            catch {
-                // swallow
-            }
+            catch { /* swallow */ }
         }
     }
 }
