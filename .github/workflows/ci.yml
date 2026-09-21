@@ -139,7 +139,7 @@ jobs:
           cat "$console_log"
           exit "$result"
 
-      - name: Test cross-process: QueueInitialization_DoesNotDeleteActiveProducerTempFile
+      - name: "Test cross-process: QueueInitialization_DoesNotDeleteActiveProducerTempFile"
         if: matrix.os == 'macos-latest'
         timeout-minutes: 7
         shell: bash
@@ -201,7 +201,7 @@ jobs:
           cat "$console_log"
           exit "$result"
 
-      - name: Test cross-process: KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart
+      - name: "Test cross-process: KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart"
         if: matrix.os == 'macos-latest'
         timeout-minutes: 7
         shell: bash
@@ -263,7 +263,7 @@ jobs:
           cat "$console_log"
           exit "$result"
 
-      - name: Test cross-process: SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce
+      - name: "Test cross-process: SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce"
         if: matrix.os == 'macos-latest'
         timeout-minutes: 7
         shell: bash
