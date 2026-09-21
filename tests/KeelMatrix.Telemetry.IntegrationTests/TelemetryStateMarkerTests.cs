@@ -99,7 +99,7 @@ public sealed class TelemetryStateMarkerTests {
         _ = new TelemetryState(runtime.RootDir, runtime.ProjectHash);
 
         var markerFiles = Directory.EnumerateFiles(runtime.MarkerDir, "*.json").ToList();
-        markerFiles.Count.Should().BeLessOrEqualTo(TelemetryConfig.MaxMarkerFiles);
+        markerFiles.Count.Should().BeLessThanOrEqualTo(TelemetryConfig.MaxMarkerFiles);
 
         // Ensure the oldest files were removed.
         // We pre-populate with "zzzz_" as the newest and "aaaa_" as the oldest.

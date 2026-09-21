@@ -698,8 +698,8 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         var queue = runtime.CreateQueue();
         queue.Enqueue("{}").Should().BeTrue();
 
-        Directory.EnumerateFiles(runtime.PendingDir, "*.json").Count().Should().BeLessOrEqualTo(TelemetryConfig.MaxPendingItems);
-        Directory.EnumerateFiles(runtime.DeadDir, "*.json").Count().Should().BeLessOrEqualTo(TelemetryConfig.MaxDeadLetterItems);
+        Directory.EnumerateFiles(runtime.PendingDir, "*.json").Count().Should().BeLessThanOrEqualTo(TelemetryConfig.MaxPendingItems);
+        Directory.EnumerateFiles(runtime.DeadDir, "*.json").Count().Should().BeLessThanOrEqualTo(TelemetryConfig.MaxDeadLetterItems);
 
         Directory.EnumerateFiles(runtime.PendingDir, "*.json")
             .Any(path => Path.GetFileName(path).Contains("_oldp_", StringComparison.Ordinal))
