@@ -213,7 +213,7 @@ public sealed class DurableTelemetryQueueIntegrationTests {
     }
 
     [Fact]
-    public void CrossProcess_KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart() {
+    public async Task CrossProcess_KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart() {
         const string childMarker = "KEELMATRIX_QUEUE_CLAIM_CHILD";
 
         if (Environment.GetEnvironmentVariable(childMarker) == "1") {
@@ -223,7 +223,14 @@ public sealed class DurableTelemetryQueueIntegrationTests {
             runtimeContext.EnsureRootDirectoryResolvedOnWorkerThread();
             var childQueue = DurableTelemetryQueue.CreateSafe(runtimeContext)!;
             var childClaim = childQueue.TryClaim(1).Single();
-            File.WriteAllText(childSignalPath, childClaim.Path);
+            var childSignalTempPath = childSignalPath + ".tmp";
+            File.WriteAllLines(
+                childSignalTempPath,
+                [
+                    childClaim.Path,
+                    Environment.ProcessId.ToString(CultureInfo.InvariantCulture)
+                ]);
+            File.Move(childSignalTempPath, childSignalPath);
             Thread.Sleep(Timeout.Infinite);
             return;
         }
@@ -249,16 +256,32 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         startInfo.Environment["KEELMATRIX_QUEUE_SIGNAL"] = signalPath;
 
         Process? child = null;
+        Process? claimOwner = null;
+        Task<string>? childStandardOutputTask = null;
+        Task<string>? childStandardErrorTask = null;
         try {
             child = Process.Start(startInfo)
                 ?? throw new InvalidOperationException("Could not start queue claim child process.");
+            childStandardOutputTask = child.StandardOutput.ReadToEndAsync();
+            childStandardErrorTask = child.StandardError.ReadToEndAsync();
 
             SpinWait.SpinUntil(() => File.Exists(signalPath) || child!.HasExited, TimeSpan.FromSeconds(30))
                 .Should().BeTrue("the child must claim the event before it is terminated");
             child!.HasExited.Should().BeFalse();
 
+            var claimSignal = File.ReadAllLines(signalPath);
+            claimSignal.Should().HaveCount(2, "the child must publish its claim path and owner process id");
+            File.Exists(claimSignal[0]).Should().BeTrue("the published claim path must identify the active claim");
+            var claimOwnerProcessId = int.Parse(claimSignal[1], CultureInfo.InvariantCulture);
+            claimOwner = Process.GetProcessById(claimOwnerProcessId);
+            claimOwner.Id.Should().NotBe(child.Id, "the signal must identify the real claim-owner test host");
+            claimOwner.HasExited.Should().BeFalse("the claim owner must be alive before termination");
+
             KillIfRunning(child);
             child.HasExited.Should().BeTrue();
+            claimOwner.WaitForExit(10_000).Should().BeTrue("the published claim-owner process must exit before recovery");
+            claimOwner.HasExited.Should().BeTrue("the published claim-owner process must be gone before recovery");
+            await Task.WhenAll(childStandardOutputTask, childStandardErrorTask);
 
             var restartedQueue = runtime.CreateQueue();
             Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
@@ -274,9 +297,18 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         finally {
             TelemetryClock.SetUtcNowOverrideForTests(null);
             if (child is not null) {
-                KillIfRunning(child);
-                child.Dispose();
+                try {
+                    KillIfRunning(child);
+                }
+                finally {
+                    if (childStandardOutputTask is not null && childStandardErrorTask is not null)
+                        await Task.WhenAll(childStandardOutputTask!, childStandardErrorTask!);
+                }
             }
+
+            if (child is not null)
+                child.Dispose();
+            claimOwner?.Dispose();
         }
     }
 
@@ -815,27 +847,32 @@ public sealed class DurableTelemetryQueueIntegrationTests {
     }
 
     private static void KillIfRunning(Process process) {
-        try {
-            if (process.HasExited)
-                return;
-
-            if (OperatingSystem.IsWindows()) {
+        if (OperatingSystem.IsWindows()) {
+            if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
-            }
-            else {
-                foreach (var processId in EnumerateDescendantProcessIds(process.Id).Reverse())
-                    KillProcess(processId);
 
+            WaitForProcessExit(process, "the process tree root");
+            return;
+        }
+
+        foreach (var processId in EnumerateDescendantProcessIds(process.Id).Reverse())
+            KillProcess(processId);
+
+        if (!process.HasExited) {
+            try {
                 process.Kill();
             }
+            catch (InvalidOperationException) when (process.HasExited) {
+                // The process exited after enumeration and before the kill.
+            }
+        }
 
-            process.WaitForExit(10_000);
-        }
-        catch {
-            // The child may have exited between HasExited and Kill.
-            try { process.WaitForExit(10_000); }
-            catch { /* swallow */ }
-        }
+        WaitForProcessExit(process, "the process tree root");
+    }
+
+    private static void WaitForProcessExit(Process process, string description) {
+        if (!process.WaitForExit(10_000))
+            throw new InvalidOperationException($"Timed out waiting for {description} process {process.Id} to exit.");
     }
 
     private static IEnumerable<int> EnumerateDescendantProcessIds(int parentProcessId) {
@@ -852,32 +889,40 @@ public sealed class DurableTelemetryQueueIntegrationTests {
     }
 
     private static IEnumerable<int> EnumerateDirectChildProcessIds(int parentProcessId) {
-        try {
-            var startInfo = new ProcessStartInfo {
-                FileName = "pgrep",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                CreateNoWindow = true
-            };
-            startInfo.ArgumentList.Add("-P");
-            startInfo.ArgumentList.Add(parentProcessId.ToString(CultureInfo.InvariantCulture));
+        var startInfo = new ProcessStartInfo {
+            FileName = "pgrep",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-P");
+        startInfo.ArgumentList.Add(parentProcessId.ToString(CultureInfo.InvariantCulture));
 
-            using var pgrep = Process.Start(startInfo);
-            if (pgrep is null)
-                return [];
+        using var pgrep = Process.Start(startInfo);
+        if (pgrep is null)
+            throw new InvalidOperationException("Could not start pgrep while enumerating child processes.");
 
-            var output = pgrep.StandardOutput.ReadToEnd();
-            pgrep.WaitForExit(1_000);
+        var output = pgrep.StandardOutput.ReadToEnd();
+        if (!pgrep.WaitForExit(1_000))
+            throw new InvalidOperationException(
+                $"Timed out waiting for pgrep while enumerating children of process {parentProcessId}.");
 
-            return output
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-                .Select(static value => int.TryParse(value, out var processId) ? processId : 0)
-                .Where(static processId => processId > 0)
-                .ToArray();
-        }
-        catch {
+        if (pgrep.ExitCode == 1)
             return [];
-        }
+        if (pgrep.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"pgrep failed with exit code {pgrep.ExitCode} while enumerating children of process {parentProcessId}.");
+
+        return output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(value => {
+                if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var processId) || processId <= 0)
+                    throw new InvalidOperationException(
+                        $"pgrep returned an invalid child process id '{value}' for process {parentProcessId}.");
+
+                return processId;
+            })
+            .ToArray();
     }
 
     private static void KillProcess(int processId) {
@@ -885,9 +930,11 @@ public sealed class DurableTelemetryQueueIntegrationTests {
             using var process = Process.GetProcessById(processId);
             if (!process.HasExited)
                 process.Kill();
+
+            WaitForProcessExit(process, "a descendant");
         }
-        catch {
-            // The child may have exited between enumeration and termination.
+        catch (ArgumentException) {
+            // The descendant exited between enumeration and termination.
         }
     }
 

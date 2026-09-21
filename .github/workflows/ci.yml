@@ -344,13 +344,7 @@ jobs:
             kill -"$signal" "$pid" 2>/dev/null || true
           }
 
-          test_filter=()
-          if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            test_filter=(--filter "FullyQualifiedName!~KeelMatrix.Telemetry.IntegrationTests.DurableTelemetryQueueIntegrationTests")
-          fi
-
           dotnet test tests/KeelMatrix.Telemetry.IntegrationTests/KeelMatrix.Telemetry.IntegrationTests.csproj \
-            "${test_filter[@]}" \
             --configuration Release \
             --no-build \
             -p:Version=${{ needs.resolve-version.outputs.version }} \
