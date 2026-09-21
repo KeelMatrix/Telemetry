@@ -139,13 +139,13 @@ jobs:
           cat "$console_log"
           exit "$result"
 
-      - name: Test cross-process queue class (macOS)
+      - name: Test cross-process: QueueInitialization_DoesNotDeleteActiveProducerTempFile
         if: matrix.os == 'macos-latest'
         timeout-minutes: 7
         shell: bash
         run: |
           set -uo pipefail
-          results_dir=./artifacts/test-results/integration-cross-process
+          results_dir=./artifacts/test-results/integration-cross-process-queue-initialization
           console_log="$results_dir/console.log"
           mkdir -p "$results_dir"
 
@@ -163,9 +163,133 @@ jobs:
             --configuration Release \
             --no-build \
             -p:Version=${{ needs.resolve-version.outputs.version }} \
-            --filter "FullyQualifiedName~KeelMatrix.Telemetry.IntegrationTests.DurableTelemetryQueueIntegrationTests" \
+            --filter "FullyQualifiedName~KeelMatrix.Telemetry.IntegrationTests.DurableTelemetryQueueIntegrationTests.CrossProcess_QueueInitialization_DoesNotDeleteActiveProducerTempFile" \
             --results-directory "$results_dir" \
-            --logger "trx;LogFileName=integration-cross-process.trx" \
+            --logger "trx;LogFileName=integration-cross-process-queue-initialization.trx" \
+            --logger "console;verbosity=detailed" \
+            --blame-hang \
+            --blame-hang-timeout 5m >"$console_log" 2>&1 &
+          test_pid=$!
+          deadline=$((SECONDS + 390))
+          timed_out=0
+
+          while kill -0 "$test_pid" 2>/dev/null; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::dotnet test exceeded the 390-second in-step deadline; terminating its process tree." | tee -a "$console_log"
+              if [[ "${RUNNER_OS}" == "Windows" ]]; then
+                taskkill.exe /PID "$test_pid" /T /F >>"$console_log" 2>&1 || true
+              else
+                kill_tree "$test_pid" TERM
+                sleep 2
+                kill_tree "$test_pid" KILL
+              fi
+              timed_out=1
+              break
+            fi
+            sleep 5
+          done
+
+          if (( timed_out )); then
+            wait "$test_pid" 2>/dev/null || true
+            result=124
+          elif wait "$test_pid"; then
+            result=0
+          else
+            result=$?
+          fi
+
+          cat "$console_log"
+          exit "$result"
+
+      - name: Test cross-process: KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 7
+        shell: bash
+        run: |
+          set -uo pipefail
+          results_dir=./artifacts/test-results/integration-cross-process-killed-claim-owner
+          console_log="$results_dir/console.log"
+          mkdir -p "$results_dir"
+
+          kill_tree() {
+            local pid="$1"
+            local signal="$2"
+            local child
+            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+              kill_tree "$child" "$signal"
+            done
+            kill -"$signal" "$pid" 2>/dev/null || true
+          }
+
+          dotnet test tests/KeelMatrix.Telemetry.IntegrationTests/KeelMatrix.Telemetry.IntegrationTests.csproj \
+            --configuration Release \
+            --no-build \
+            -p:Version=${{ needs.resolve-version.outputs.version }} \
+            --filter "FullyQualifiedName~KeelMatrix.Telemetry.IntegrationTests.DurableTelemetryQueueIntegrationTests.CrossProcess_KilledClaimOwner_IsRecoveredAfterLeaseWithoutSecondRestart" \
+            --results-directory "$results_dir" \
+            --logger "trx;LogFileName=integration-cross-process-killed-claim-owner.trx" \
+            --logger "console;verbosity=detailed" \
+            --blame-hang \
+            --blame-hang-timeout 5m >"$console_log" 2>&1 &
+          test_pid=$!
+          deadline=$((SECONDS + 390))
+          timed_out=0
+
+          while kill -0 "$test_pid" 2>/dev/null; do
+            if (( SECONDS >= deadline )); then
+              echo "::error::dotnet test exceeded the 390-second in-step deadline; terminating its process tree." | tee -a "$console_log"
+              if [[ "${RUNNER_OS}" == "Windows" ]]; then
+                taskkill.exe /PID "$test_pid" /T /F >>"$console_log" 2>&1 || true
+              else
+                kill_tree "$test_pid" TERM
+                sleep 2
+                kill_tree "$test_pid" KILL
+              fi
+              timed_out=1
+              break
+            fi
+            sleep 5
+          done
+
+          if (( timed_out )); then
+            wait "$test_pid" 2>/dev/null || true
+            result=124
+          elif wait "$test_pid"; then
+            result=0
+          else
+            result=$?
+          fi
+
+          cat "$console_log"
+          exit "$result"
+
+      - name: Test cross-process: SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce
+        if: matrix.os == 'macos-latest'
+        timeout-minutes: 7
+        shell: bash
+        run: |
+          set -uo pipefail
+          results_dir=./artifacts/test-results/integration-cross-process-simultaneous-producers-consumers
+          console_log="$results_dir/console.log"
+          mkdir -p "$results_dir"
+
+          kill_tree() {
+            local pid="$1"
+            local signal="$2"
+            local child
+            for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+              kill_tree "$child" "$signal"
+            done
+            kill -"$signal" "$pid" 2>/dev/null || true
+          }
+
+          dotnet test tests/KeelMatrix.Telemetry.IntegrationTests/KeelMatrix.Telemetry.IntegrationTests.csproj \
+            --configuration Release \
+            --no-build \
+            -p:Version=${{ needs.resolve-version.outputs.version }} \
+            --filter "FullyQualifiedName~KeelMatrix.Telemetry.IntegrationTests.DurableTelemetryQueueIntegrationTests.CrossProcess_SimultaneousProducersAndConsumers_DeliverEachEnvelopeOnce" \
+            --results-directory "$results_dir" \
+            --logger "trx;LogFileName=integration-cross-process-simultaneous-producers-consumers.trx" \
             --logger "console;verbosity=detailed" \
             --blame-hang \
             --blame-hang-timeout 5m >"$console_log" 2>&1 &
