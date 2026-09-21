@@ -180,7 +180,6 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     [Fact]
     public async Task ActivationPlanning_StopsRetryingAfterQueueWriteBudget_AndFreshRequestReopensIt() {
         using var harness = new WorkerHarness();
-        using var worker = harness.CreateWorker();
         var writeAttempts = 0;
 
         DurableTelemetryQueue.SetPendingWritePauseHookForTests((tmpPath, _) => {
@@ -189,6 +188,8 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
         });
 
         try {
+            using var worker = harness.CreateWorker();
+
             worker.RequestActivation();
 
             await WaitUntilAsync(() => Volatile.Read(ref writeAttempts) == 8, TimeSpan.FromSeconds(15));
