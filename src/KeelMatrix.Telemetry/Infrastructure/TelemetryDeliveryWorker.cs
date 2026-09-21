@@ -199,12 +199,20 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
                 // Plan & enqueue new telemetry based on requests (marker I/O happens here, not on caller)
                 bool requestsNeedRetry = false;
-                try {
-                    requestsNeedRetry = ProcessRequestsOnWorkerThread(telemetryQueue);
+                var enqueueRecoveryExhausted =
+                    queueWriteFailures >= MaxQueueRecoveryAttempts && HasPendingRequest();
+
+                if (!enqueueRecoveryExhausted) {
+                    try {
+                        requestsNeedRetry = ProcessRequestsOnWorkerThread(telemetryQueue);
+                    }
+                    catch {
+                        // swallow; telemetry must never impact host
+                    }
                 }
-                catch {
-                    // swallow; telemetry must never impact host
-                }
+                // The initial failed enqueue counts as attempt one. Once the finite budget
+                // is exhausted, leave the request flag set and keep the queue available for
+                // draining existing work, but do not re-run request planning or marker I/O.
 
                 if (requestsNeedRetry) {
                     queueWriteFailures++;
@@ -218,7 +226,7 @@ namespace KeelMatrix.Telemetry.Infrastructure {
                         // public request resets this budget.
                     }
                 }
-                else {
+                else if (!enqueueRecoveryExhausted) {
                     queueWriteFailures = 0;
                 }
 
@@ -431,6 +439,11 @@ namespace KeelMatrix.Telemetry.Infrastructure {
 
             queue = DurableTelemetryQueue.CreateSafe(runtimeContext);
             return queue;
+        }
+
+        private bool HasPendingRequest() {
+            return Volatile.Read(ref activationRequested) == 1
+                || Volatile.Read(ref heartbeatRequested) == 1;
         }
 
         private static async Task ApplyQueueRecoveryDelay(int attempt, CancellationToken token) {

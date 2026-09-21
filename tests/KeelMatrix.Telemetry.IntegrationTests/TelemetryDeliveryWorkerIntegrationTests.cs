@@ -175,6 +175,44 @@ public sealed class TelemetryDeliveryWorkerIntegrationTests {
     }
 
     [Fact]
+    public async Task ActivationPlanning_StopsRetryingAfterQueueWriteBudget_AndFreshRequestReopensIt() {
+        using var harness = new WorkerHarness();
+        using var worker = harness.CreateWorker();
+        var writeAttempts = 0;
+
+        DurableTelemetryQueue.SetPendingWritePauseHookForTests((tmpPath, _) => {
+            Interlocked.Increment(ref writeAttempts);
+            File.Delete(tmpPath);
+        });
+
+        try {
+            worker.RequestActivation();
+
+            await WaitUntilAsync(() => Volatile.Read(ref writeAttempts) == 8, TimeSpan.FromSeconds(15));
+            var exhaustedAttemptCount = Volatile.Read(ref writeAttempts);
+            await Task.Delay(TimeSpan.FromSeconds(2.5));
+
+            Volatile.Read(ref writeAttempts).Should().Be(exhaustedAttemptCount);
+            harness.CountMarkerFiles("activation.*.json").Should().Be(0);
+            harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(0);
+
+            DurableTelemetryQueue.SetPendingWritePauseHookForTests((_, _) => Interlocked.Increment(ref writeAttempts));
+            worker.RequestActivation();
+
+            await WaitUntilAsync(
+                () => harness.Sender.Received.Any(r => r.Event == "activation"),
+                TimeSpan.FromSeconds(5));
+
+            Volatile.Read(ref writeAttempts).Should().Be(exhaustedAttemptCount + 1);
+            harness.CountMarkerFiles("activation.*.json").Should().Be(1);
+            harness.CountMarkerFiles($"heartbeat.*.{harness.CurrentWeek}.json").Should().Be(1);
+        }
+        finally {
+            DurableTelemetryQueue.SetPendingWritePauseHookForTests(null);
+        }
+    }
+
+    [Fact]
     public async Task ActivationPlanning_SuppressesHeartbeatForSameWeek() {
         using var harness = new WorkerHarness();
         using var worker = harness.CreateWorker();
