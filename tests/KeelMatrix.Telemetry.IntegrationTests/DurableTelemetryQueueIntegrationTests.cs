@@ -257,8 +257,8 @@ public sealed class DurableTelemetryQueueIntegrationTests {
                 .Should().BeTrue("the child must claim the event before it is terminated");
             child!.HasExited.Should().BeFalse();
 
-            child.Kill(entireProcessTree: true);
-            child.WaitForExit(10_000).Should().BeTrue();
+            KillIfRunning(child);
+            child.HasExited.Should().BeTrue();
 
             var restartedQueue = runtime.CreateQueue();
             Directory.EnumerateFiles(runtime.PendingDir, "*.json").Should().BeEmpty();
@@ -819,13 +819,75 @@ public sealed class DurableTelemetryQueueIntegrationTests {
             if (process.HasExited)
                 return;
 
-            process.Kill(entireProcessTree: true);
+            if (OperatingSystem.IsWindows()) {
+                process.Kill(entireProcessTree: true);
+            }
+            else {
+                foreach (var processId in EnumerateDescendantProcessIds(process.Id).Reverse())
+                    KillProcess(processId);
+
+                process.Kill();
+            }
+
             process.WaitForExit(10_000);
         }
         catch {
             // The child may have exited between HasExited and Kill.
             try { process.WaitForExit(10_000); }
             catch { /* swallow */ }
+        }
+    }
+
+    private static IEnumerable<int> EnumerateDescendantProcessIds(int parentProcessId) {
+        var pending = new Stack<int>();
+        pending.Push(parentProcessId);
+
+        while (pending.Count > 0) {
+            var parentId = pending.Pop();
+            foreach (var childId in EnumerateDirectChildProcessIds(parentId)) {
+                pending.Push(childId);
+                yield return childId;
+            }
+        }
+    }
+
+    private static IEnumerable<int> EnumerateDirectChildProcessIds(int parentProcessId) {
+        try {
+            var startInfo = new ProcessStartInfo {
+                FileName = "pgrep",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true
+            };
+            startInfo.ArgumentList.Add("-P");
+            startInfo.ArgumentList.Add(parentProcessId.ToString(CultureInfo.InvariantCulture));
+
+            using var pgrep = Process.Start(startInfo);
+            if (pgrep is null)
+                return [];
+
+            var output = pgrep.StandardOutput.ReadToEnd();
+            pgrep.WaitForExit(1_000);
+
+            return output
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
+                .Select(static value => int.TryParse(value, out var processId) ? processId : 0)
+                .Where(static processId => processId > 0)
+                .ToArray();
+        }
+        catch {
+            return [];
+        }
+    }
+
+    private static void KillProcess(int processId) {
+        try {
+            using var process = Process.GetProcessById(processId);
+            if (!process.HasExited)
+                process.Kill();
+        }
+        catch {
+            // The child may have exited between enumeration and termination.
         }
     }
 
