@@ -248,10 +248,11 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         startInfo.Environment["KEELMATRIX_QUEUE_TOOL"] = runtime.ToolNameUpper;
         startInfo.Environment["KEELMATRIX_QUEUE_SIGNAL"] = signalPath;
 
-        using var child = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start queue claim child process.");
-
+        Process? child = null;
         try {
+            child = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Could not start queue claim child process.");
+
             SpinWait.SpinUntil(() => File.Exists(signalPath) || child!.HasExited, TimeSpan.FromSeconds(30))
                 .Should().BeTrue("the child must claim the event before it is terminated");
             child!.HasExited.Should().BeFalse();
@@ -272,9 +273,9 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         }
         finally {
             TelemetryClock.SetUtcNowOverrideForTests(null);
-            if (!child.HasExited) {
-                try { child.Kill(entireProcessTree: true); }
-                catch { /* swallow */ }
+            if (child is not null) {
+                KillIfRunning(child);
+                child.Dispose();
             }
         }
     }
@@ -445,8 +446,10 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         }
         finally {
             File.WriteAllText(producersDonePath, "done");
-            foreach (var child in children)
+            foreach (var child in children) {
                 KillIfRunning(child);
+                child.Dispose();
+            }
         }
     }
 
@@ -524,19 +527,20 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         var producerSignalPath = Path.Combine(runtime.RootDir, "active-temp-producer.signal");
         var initializerSignalPath = Path.Combine(runtime.RootDir, "active-temp-initializer.signal");
         var releasePath = Path.Combine(runtime.RootDir, "active-temp.release");
-        using var producer = StartQueueTestProcess(
-            nameof(CrossProcess_QueueInitialization_DoesNotDeleteActiveProducerTempFile),
-            "active-temp-producer",
-            runtime.ToolNameUpper,
-            producerSignalPath,
-            releasePath);
-
+        Process? producer = null;
         try {
+            producer = StartQueueTestProcess(
+                nameof(CrossProcess_QueueInitialization_DoesNotDeleteActiveProducerTempFile),
+                "active-temp-producer",
+                runtime.ToolNameUpper,
+                producerSignalPath,
+                releasePath);
+
             SpinWait.SpinUntil(
-                () => File.Exists(producerSignalPath) || producer.HasExited,
+                () => File.Exists(producerSignalPath) || producer!.HasExited,
                 TimeSpan.FromSeconds(30))
                 .Should().BeTrue("the producer must pause after writing its temp file");
-            producer.HasExited.Should().BeFalse();
+            producer!.HasExited.Should().BeFalse();
 
             var producerPaths = File.ReadAllLines(producerSignalPath);
             producerPaths.Should().HaveCount(2);
@@ -571,7 +575,10 @@ public sealed class DurableTelemetryQueueIntegrationTests {
         }
         finally {
             File.WriteAllText(releasePath, "release");
-            KillIfRunning(producer);
+            if (producer is not null) {
+                KillIfRunning(producer);
+                producer.Dispose();
+            }
         }
     }
 
@@ -787,9 +794,19 @@ public sealed class DurableTelemetryQueueIntegrationTests {
     }
 
     private static async Task WaitForChildSuccessAsync(Process process) {
-        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(90));
-        var standardOutput = await process.StandardOutput.ReadToEndAsync();
-        var standardError = await process.StandardError.ReadToEndAsync();
+        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+        var standardErrorTask = process.StandardError.ReadToEndAsync();
+        try {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(90));
+        }
+        catch {
+            KillIfRunning(process);
+            await Task.WhenAll(standardOutputTask, standardErrorTask);
+            throw;
+        }
+
+        var standardOutput = await standardOutputTask;
+        var standardError = await standardErrorTask;
         process.ExitCode.Should().Be(
             0,
             "child process output: stdout={0}; stderr={1}",
@@ -799,11 +816,16 @@ public sealed class DurableTelemetryQueueIntegrationTests {
 
     private static void KillIfRunning(Process process) {
         try {
-            if (!process.HasExited)
-                process.Kill(entireProcessTree: true);
+            if (process.HasExited)
+                return;
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(10_000);
         }
         catch {
             // The child may have exited between HasExited and Kill.
+            try { process.WaitForExit(10_000); }
+            catch { /* swallow */ }
         }
     }
 
