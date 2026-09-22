@@ -17,7 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Bounded canonical durable-queue claim filenames so repeated recovery and reclaim cycles do not grow claim suffixes without bound.
 - Enforced a finite queue-write recovery budget while preserving failed requests as durable intent for a later explicit retry.
 - Made enqueue acceptance explicit: activation and heartbeat suppression markers are committed only after durable enqueue, and failed enqueues do not suppress unsent events.
-- Added crash recovery and cross-process queue ownership handling with bounded pending, processing, and dead-letter resource limits.
+- Added crash recovery and cross-process queue ownership handling, with bounded pending/dead-letter retention and leased processing claims.
 - Kept process exit non-blocking while ensuring orderly worker teardown and bounded wakeup signaling, retries, and backoff.
 - Rechecked process and repository opt-out before event publication and during queue draining, returning unstarted claims without consuming failure budget when opt-out changes.
 - Serialized first-run installation-salt publication and corrupt-salt recovery so concurrent processes preserve a valid persisted winner and unsafe persistence disables telemetry for the process.
