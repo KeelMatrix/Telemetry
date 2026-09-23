@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [0.1.1] - 2026-09-22
+## [0.1.1] - 2026-09-23
 
 ### Changed
 
@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Bounded canonical durable-queue claim filenames so repeated recovery and reclaim cycles do not grow claim suffixes without bound.
-- Enforced a finite queue-write recovery budget while preserving failed requests as durable intent for a later explicit retry.
+- Enforced a finite queue-write recovery budget; after exhaustion, further enqueue I/O is suppressed until a later explicit telemetry request resets the in-process retry budget.
 - Made enqueue acceptance explicit: activation and heartbeat suppression markers are committed only after durable enqueue, and failed enqueues do not suppress unsent events.
 - Added crash recovery and cross-process queue ownership handling, with bounded pending/dead-letter retention and leased processing claims.
 - Kept process exit non-blocking while ensuring orderly worker teardown and bounded wakeup signaling, retries, and backoff.
