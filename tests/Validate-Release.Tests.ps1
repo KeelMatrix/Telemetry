@@ -10,7 +10,7 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $packageDirectory 'unexpected') | Out-Null
     Set-Content -LiteralPath (Join-Path $packageDirectory 'unexpected/nested.txt') -Value 'unexpected'
 
-    $output = & pwsh -NoProfile -File (Join-Path $repositoryRoot 'scripts/Validate-Release.ps1') `
+    $output = & pwsh -NoProfile -WindowStyle Hidden -File (Join-Path $repositoryRoot 'scripts/Validate-Release.ps1') `
         -Version '0.1.1' `
         -RepositoryRoot $repositoryRoot `
         -PackageDirectory $packageDirectory 2>&1 | Out-String
