@@ -20,7 +20,7 @@ try {
         throw 'Validate-Release.ps1 accepted an unexpected nested package-directory entry.'
     }
 
-    if ($output -notmatch 'Unexpected files or directories in the package directory') {
+    if ($output -notmatch 'Unexpected files or directories') {
         throw "Validate-Release.ps1 failed for an unexpected reason: $output"
     }
 

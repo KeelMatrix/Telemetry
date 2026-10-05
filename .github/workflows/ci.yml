@@ -81,6 +81,15 @@ jobs:
             6.0.x
             10.0.201
 
+      - name: Validate website package metadata
+        shell: pwsh
+        run: ./scripts/Validate-WebsiteMetadata.ps1
+
+      - name: Test website metadata validation
+        if: matrix.os == 'ubuntu-latest'
+        shell: pwsh
+        run: ./tests/Validate-WebsiteMetadata.Tests.ps1
+
       - name: Restore
         run: dotnet restore KeelMatrix.Telemetry.slnx --configfile NuGet.config
 

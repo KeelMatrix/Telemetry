@@ -9,9 +9,9 @@
 		<EnablePublicApiAnalyzers>true</EnablePublicApiAnalyzers>
 		<PackageId>KeelMatrix.Telemetry</PackageId>
 		<Description>Shared, privacy-first telemetry infrastructure for KeelMatrix products, providing activation and usage signals with minimal, non-intrusive data collection.</Description>
-		<PackageTags>telemetry;analytics;observability;dotnet;library;nuget;activation;usage-tracking;privacy;non-blocking</PackageTags>
+		<PackageTags>telemetry;analytics;observability;dotnet;library;nuget;activation;usage-tracking;privacy;non-blocking;keelmatrix-internal-package;keelmatrix-primary</PackageTags>
 		<RepositoryUrl>https://github.com/KeelMatrix/Telemetry</RepositoryUrl>
-		<PackageProjectUrl>https://github.com/KeelMatrix/Telemetry#readme</PackageProjectUrl>
+		<PackageProjectUrl>https://github.com/KeelMatrix/Telemetry</PackageProjectUrl>
 		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<PackageLicenseExpression>MIT</PackageLicenseExpression>
 		<PackageIcon>icon.png</PackageIcon>

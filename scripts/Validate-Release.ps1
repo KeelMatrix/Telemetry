@@ -22,6 +22,7 @@ $launchGuard = Join-Path $RepositoryRoot 'build/Test-NestedPwshLaunch.ps1'
 if ($LASTEXITCODE -ne 0) { throw 'Nested PowerShell launch guard self-test failed.' }
 & $launchGuard
 if ($LASTEXITCODE -ne 0) { throw 'Nested PowerShell launch guard failed.' }
+& (Join-Path $PSScriptRoot 'Validate-WebsiteMetadata.ps1') -RepositoryRoot $RepositoryRoot
 
 function Fail([string]$Message) {
     throw "Release validation failed: $Message"
@@ -175,10 +176,28 @@ try {
         Assert-Condition ($metadata.SelectSingleNode("*[local-name()='version']").InnerText -eq $Version) 'The nuspec version does not match the release version.'
         Assert-Condition ($metadata.SelectSingleNode("*[local-name()='readme']").InnerText -eq 'README.md') 'The nuspec README metadata is incorrect.'
         Assert-Condition ($metadata.SelectSingleNode("*[local-name()='icon']").InnerText -eq 'icon.png') 'The nuspec icon metadata is incorrect.'
+        Assert-Condition ($metadata.SelectSingleNode("*[local-name()='authors']").InnerText -eq 'KeelMatrix') 'The nuspec package authors are incorrect.'
+        Assert-Condition (-not [string]::IsNullOrWhiteSpace($metadata.SelectSingleNode("*[local-name()='description']").InnerText)) 'The nuspec package description is missing.'
+        Assert-Condition ($metadata.SelectSingleNode("*[local-name()='projectUrl']").InnerText -eq 'https://github.com/KeelMatrix/Telemetry') 'The nuspec project URL is incorrect.'
         $license = $metadata.SelectSingleNode("*[local-name()='license']")
         Assert-Condition ($null -ne $license -and $license.GetAttribute('type') -eq 'expression' -and $license.InnerText -eq 'MIT') 'The nuspec license metadata is incorrect.'
         $repository = $metadata.SelectSingleNode("*[local-name()='repository']")
         Assert-Condition ($null -ne $repository -and $repository.GetAttribute('url') -eq 'https://github.com/KeelMatrix/Telemetry') 'The nuspec repository metadata is incorrect.'
+        $websiteEntry = (Get-Content -LiteralPath (Join-Path $RepositoryRoot 'keelmatrix.website.json') -Raw | ConvertFrom-Json).packages.'KeelMatrix.Telemetry'
+        $expectedVisibilityTag = if ($websiteEntry.visibility -eq 'public-product') { 'keelmatrix-public-product' } else { 'keelmatrix-internal-package' }
+        $expectedRoleTag = if ($websiteEntry.role -eq 'primary') { 'keelmatrix-primary' } else { 'keelmatrix-component' }
+        $nuspecTags = $metadata.SelectSingleNode("*[local-name()='tags']")
+        Assert-Condition ($null -ne $nuspecTags) 'The nuspec package tags are missing.'
+        $packageTags = @($nuspecTags.InnerText -split '[;\s]+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $visibilityTags = @($packageTags | Where-Object { @('keelmatrix-public-product', 'keelmatrix-internal-package') -ccontains $_ })
+        $roleTags = @($packageTags | Where-Object { @('keelmatrix-primary', 'keelmatrix-component') -ccontains $_ })
+        Assert-Condition ($visibilityTags.Count -eq 1 -and $visibilityTags[0] -ceq $expectedVisibilityTag) 'The nuspec visibility sentinel does not agree with the website manifest.'
+        Assert-Condition ($roleTags.Count -eq 1 -and $roleTags[0] -ceq $expectedRoleTag) 'The nuspec role sentinel does not agree with the website manifest.'
+        $packageTypes = $metadata.SelectSingleNode("*[local-name()='packageTypes']")
+        if ($null -ne $packageTypes) {
+            $packageTypeNames = @($packageTypes.SelectNodes("*[local-name()='packageType']") | ForEach-Object { $_.GetAttribute('name') })
+            Assert-Condition ($packageTypeNames.Count -eq 1 -and $packageTypeNames[0] -ceq 'Dependency') 'The nuspec package type must remain Dependency.'
+        }
 
         foreach ($tfm in @('net8.0', 'netstandard2.0')) {
             $dllEntry = $entries | Where-Object FullName -eq "lib/$tfm/KeelMatrix.Telemetry.dll" | Select-Object -First 1
