@@ -114,6 +114,9 @@ try {
     Set-Content -LiteralPath $manifestPath -Value $staleManifest -Encoding utf8NoBOM
     Assert-WebsiteMetadataFails 'KeelMatrix.Stale'
 
+    # Expected invalid-fixture checks invoke a child pwsh that exits nonzero.
+    # Clear that native exit status so this successful regression script exits 0.
+    $global:LASTEXITCODE = 0
     Write-Output 'Validate-WebsiteMetadata regression checks passed.'
 }
 finally {
